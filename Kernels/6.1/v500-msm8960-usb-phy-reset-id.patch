@@ -1,0 +1,10 @@
+diff --git a/include/dt-bindings/reset/qcom,gcc-msm8960.h b/include/dt-bindings/reset/qcom,gcc-msm8960.h
+--- a/include/dt-bindings/reset/qcom,gcc-msm8960.h
++++ b/include/dt-bindings/reset/qcom,gcc-msm8960.h
+@@ -122,5 +122,6 @@
+ #define CE3_SLEEP_RESET					113
+ #define GSS_SLP_RESET					114
+ #define GSS_RESET					115
++#define USB_PHY0_RESET					116
+ 
+ #endif

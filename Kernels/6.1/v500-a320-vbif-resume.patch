@@ -1,0 +1,31 @@
+diff --git a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+--- a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+@@ -489,12 +489,25 @@ static int a3xx_vbif_halt(struct msm_gpu *gpu)
+ 	gpu_write(gpu, REG_A3XX_VBIF_XIN_HALT_CTRL0,
+ 		  A3XX_VBIF_XIN_HALT_CTRL0_MASK);
+ 	if (of_machine_is_compatible("lg,v500")) {
++		struct device *dev = &gpu->pdev->dev;
++		unsigned long flags;
++		bool runtime;
++
+ 		/* The LG A320 driver allows 100 ms for all six XIN clients.
+-		 * Runtime resume waits for this callback when a new job arrives.
++		 * Let a new runtime power user cancel the idle attempt. System
++		 * suspend still waits for all clients after parking the scheduler.
+ 		 */
++		spin_lock_irqsave(&dev->power.lock, flags);
++		runtime = pm_runtime_enabled(dev) &&
++			  dev->power.runtime_status == RPM_SUSPENDING;
++		spin_unlock_irqrestore(&dev->power.lock, flags);
+ 		ret = read_poll_timeout(gpu_read, ack,
+ 			(ack & A3XX_VBIF_XIN_HALT_CTRL0_MASK) ==
+-				A3XX_VBIF_XIN_HALT_CTRL0_MASK,
++				A3XX_VBIF_XIN_HALT_CTRL0_MASK ||
++			(runtime && atomic_read(&dev->power.usage_count) > 0),
+ 			50, 100000, false, gpu, REG_A3XX_VBIF_XIN_HALT_CTRL1);
++		if ((ack & A3XX_VBIF_XIN_HALT_CTRL0_MASK) !=
++		    A3XX_VBIF_XIN_HALT_CTRL0_MASK)
++			ret = -EBUSY;
+ 	} else {
+ 		ret = spin_until(((ack = gpu_read(gpu, REG_A3XX_VBIF_XIN_HALT_CTRL1)) &

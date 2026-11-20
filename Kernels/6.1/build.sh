@@ -8,6 +8,12 @@ source_dir="$work/v500-port-6.1.177"
 build_dir="$work/build-6.1.177-v500"
 probe=${1:-lineage21}
 case "$probe" in trace|lineage21) ;; *) echo "Usage: $0 [trace|lineage21]" >&2; exit 2 ;; esac
+vbif_cancel_idle=${V500_M6_VBIF_CANCEL_IDLE:-0}
+case "$vbif_cancel_idle" in
+    0) ;;
+    1) [[ $probe == lineage21 ]]; source_dir+=-vbif-resume; build_dir+=-vbif-resume ;;
+    *) echo 'V500_M6_VBIF_CANCEL_IDLE must be 0 or 1' >&2; exit 2 ;;
+esac
 export_dir="${V500_EXPORT_DIR:-$port/out}/probes/$probe"
 lineage=${LINEAGE_SOURCE_DIR:-$HOME/android/lineage}
 m6="$port/../../lineage21"
@@ -26,6 +32,8 @@ fi
 changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-add
          v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight
          v500-a320-vbif-timeout)
+if [[ $vbif_cancel_idle == 1 ]]; then changes+=(v500-a320-vbif-resume); fi
+changes+=(v500-msm8960-usb-phy-reset-id)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
