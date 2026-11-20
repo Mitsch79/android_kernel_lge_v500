@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+echo 1 > /proc/sys/net/core/bpf_jit_enable
+for op in W_ADD W_ADD_FETCH DW_ADD DW_ADD_FETCH; do
+    # Keep the quoted upstream test name intact through the module parameter parser.
+    busybox insmod /bin/test_bpf.ko "test_name=\"ATOMIC_$op: register combinations\""
+    busybox rmmod test_bpf
+done
+for op in DIV MOD; do
+    busybox insmod /bin/test_bpf.ko "test_name=\"ALU64_${op}_X: register combinations\""
+    busybox rmmod test_bpf
+    busybox insmod /bin/test_bpf.ko "test_name=\"ALU64_${op}_K: registers\""
+    busybox rmmod test_bpf
+done
+printf '<6>v500-init: eight ARM JIT arithmetic tests passed\n' > /dev/kmsg

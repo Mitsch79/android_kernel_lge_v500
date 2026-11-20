@@ -1,0 +1,81 @@
+--- a/qcom-apq8064-lg-v500.dts
++++ b/qcom-apq8064-lg-v500.dts
+@@ -2,8 +2,6 @@
+ /dts-v1/;
+ 
+ #include "qcom-apq8064-v2.0.dtsi"
+-#include "pm8821.dtsi"
+-#include "pm8921.dtsi"
+ 
+ / {
+ 	model = "LG G Pad 8.3 (V500)";
+@@ -59,21 +57,17 @@
+ };
+ 
+ /* Legacy awifi power and interrupt configuration. */
+-&pm8821 {
+-	interrupts-extended = <&tlmm_pinmux 76 IRQ_TYPE_LEVEL_LOW>;
+-};
+ 
+-&pm8921 {
+-	interrupts-extended = <&tlmm_pinmux 74 IRQ_TYPE_LEVEL_LOW>;
++&pmicintc {
+ 
+ 	v500_usb_vbus: usb-vbus {
+ 		compatible = "qcom,pm8921-usb-vbus";
+ 		/* PM8921 USBIN_VALID: block 1, bit 7. */
+-		interrupts-extended = <&pm8921 15 IRQ_TYPE_EDGE_BOTH>;
++		interrupts-extended = <&pmicintc 15 IRQ_TYPE_EDGE_BOTH>;
+ 	};
+ };
+ 
+-&rpm {
++&{/soc/rpm@108000} {
+ 	regulators {
+ 		compatible = "qcom,rpm-pm8921-regulators";
+ 
+--- a/qcom-apq8064-lg-v500-display.dts
++++ b/qcom-apq8064-lg-v500-display.dts
+@@ -17,7 +17,12 @@
+ 	};
+ };
+ 
+-&rpm {
++&{/soc/timer@200a000} {
++	clocks = <&sleep_clk>;
++	clock-names = "sleep";
++};
++
++&{/soc/rpm@108000} {
+ 	regulators {
+ 		vdd_l1_l2_l12_l18-supply = <&v500_s4>;
+ 		vin_lvs1_3_6-supply = <&v500_s4>;
+@@ -93,14 +98,14 @@
+ 	resets = <&mmcc MDP_RESET>;
+ 	clocks = <&mmcc MDP_CLK>, <&mmcc MDP_AHB_CLK>, <&mmcc MDP_AXI_CLK>,
+ 		 <&mmcc MDP_LUT_CLK>, <&mmcc HDMI_TV_CLK>, <&mmcc MDP_TV_CLK>,
+-		 <&mmcc LVDS_CLK>, <&rpmcc RPM_PXO_CLK>, <&rpmcc RPM_EBI1_A_CLK>;
++		 <&rpmcc RPM_EBI1_A_CLK>;
+ 	clock-names = "core_clk", "iface_clk", "bus_clk", "lut_clk", "hdmi_clk",
+-		      "tv_clk", "lcdc_clk", "pxo", "ebi1";
++		      "tv_clk", "ebi1";
+ 	status = "okay";
+ };
+ 
+ &gpu {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &gpu_opp_table {
+--- a/qcom-apq8064.dtsi
++++ b/qcom-apq8064.dtsi
+@@ -1179,7 +1179,7 @@
+ 			reg = <0x1a400000 0x100>;
+ 		};
+ 
+-		gpu: adreno-3xx@4300000 {
++		gpu: gpu@4300000 {
+ 			compatible = "qcom,adreno-320.2", "qcom,adreno";
+ 			reg = <0x04300000 0x20000>;
+ 			reg-names = "kgsl_3d0_reg_memory";

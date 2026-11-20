@@ -1,0 +1,72 @@
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+index 9f406e9c0..5d29a5f14 100644
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -8,6 +8,7 @@
+ #include <linux/linkage.h>
+ #include <asm/assembler.h>
+ #include <asm/v7m.h>
++#include <asm/v500-boot-probe.h>
+ 
+ #include "efi-header.S"
+ 
+@@ -245,6 +246,11 @@ not_angel:
+ 		safe_svcmode_maskall r0
+ 		msr	spsr_cxsf, r9		@ Save the CPU boot mode in
+ 						@ SPSR
++#endif
++#if V500_BOOT_PROBE == 1
++		v500_watchdog_recovery v500_probe_zentry
++#elif V500_BOOT_PROBE == 4
++		v500_ram_console_mark 1
+ #endif
+ 		/*
+ 		 * Note that some cache flushing and other stuff may
+@@ -258,7 +264,9 @@ not_angel:
+ 
+ 		.text
+ 
+-#ifdef CONFIG_AUTO_ZRELADDR
++#if defined(LG_V500_ZRELADDR)
++		ldr	r4, =LG_V500_ZRELADDR
++#elif defined(CONFIG_AUTO_ZRELADDR)
+ 		/*
+ 		 * Find the start of physical memory.  As we are executing
+ 		 * without the MMU on, we are in the physical address space.
+@@ -639,6 +647,11 @@ not_relocated:	mov	r0, #0
+ 		add	r1, r1, r0		@ end of inflated image
+ 		bl	cache_clean_flush
+ 		bl	cache_off
++#if V500_BOOT_PROBE == 2
++		v500_watchdog_recovery v500_probe_decompressed
++#elif V500_BOOT_PROBE == 4
++		v500_ram_console_mark 2
++#endif
+ 
+ #ifdef CONFIG_ARM_VIRT_EXT
+ 		mrs	r0, spsr		@ Get saved CPU boot mode
+diff --git a/arch/arm/kernel/head.S b/arch/arm/kernel/head.S
+index 21930b9ac..ac1fe56bc 100644
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -19,6 +19,7 @@
+ #include <asm/asm-offsets.h>
+ #include <asm/memory.h>
+ #include <asm/thread_info.h>
++#include <asm/v500-boot-probe.h>
+ 
+ #if defined(CONFIG_DEBUG_LL) && !defined(CONFIG_DEBUG_SEMIHOSTING)
+ #include CONFIG_DEBUG_LL_INCLUDE
+@@ -103,6 +104,12 @@ ENTRY(stext)
+ #endif
+ 	@ ensure svc mode and all interrupts masked
+ 	safe_svcmode_maskall r9
++#if V500_BOOT_PROBE == 3
++	v500_watchdog_recovery v500_probe_kernel_entry
++#elif V500_BOOT_PROBE == 4
++	v500_ram_console_mark 3
++	v500_arm_recovery_watchdog (45 << 15)
++#endif
+ 
+ 	mrc	p15, 0, r9, c0, c0		@ get processor id
+ 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid

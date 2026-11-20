@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: GPL-2.0
+/dts-v1/;
+
+#include "qcom-apq8064-v2.0.dtsi"
+#include "pm8821.dtsi"
+#include "pm8921.dtsi"
+
+/ {
+	model = "LG G Pad 8.3 (V500)";
+	compatible = "lg,v500", "qcom,apq8064";
+	chassis-type = "tablet";
+
+	aliases {
+		mmc0 = &sdcc1;
+		serial0 = &gsbi7_serial;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs = "mem=128M@0x80200000 maxcpus=1 rdinit=/init loglevel=8 ignore_loglevel initcall_debug printk.time=1 log_buf_len=2M console=ttyMSM0,115200n8";
+	};
+
+	/* Restrict bring-up to the start of the first verified RAM bank. */
+	memory@80200000 {
+		device_type = "memory";
+		reg = <0x80200000 0x08000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		ramoops@88100000 {
+			compatible = "ramoops";
+			reg = <0x88100000 0x00100000>;
+			record-size = <0x00020000>;
+			console-size = <0x00080000>;
+			pmsg-size = <0x00020000>;
+			max-reason = <2>;
+		};
+	};
+
+	soc {
+		sram@2a03f000 {
+			compatible = "qcom,apq8064-imem", "syscon", "simple-mfd";
+			reg = <0x2a03f000 0x1000>;
+
+			reboot-mode {
+				compatible = "syscon-reboot-mode";
+				offset = <0x65c>;
+				mode-normal = <0x77665501>;
+				/* Android adbd requests "shell" for a normal reboot. */
+				mode-shell = <0x77665501>;
+				mode-recovery = <0x77665502>;
+			};
+		};
+	};
+};
+
+/* Legacy awifi power and interrupt configuration. */
+&pm8821 {
+	interrupts-extended = <&tlmm_pinmux 76 IRQ_TYPE_LEVEL_LOW>;
+};
+
+&pm8921 {
+	interrupts-extended = <&tlmm_pinmux 74 IRQ_TYPE_LEVEL_LOW>;
+
+	v500_usb_vbus: usb-vbus {
+		compatible = "qcom,pm8921-usb-vbus";
+		/* PM8921 USBIN_VALID: block 1, bit 7. */
+		interrupts-extended = <&pm8921 15 IRQ_TYPE_EDGE_BOTH>;
+	};
+};
+
+&rpm {
+	regulators {
+		compatible = "qcom,rpm-pm8921-regulators";
+
+		v500_s3: s3 {
+			/* LG msm_otg votes at least 1.045 V for active VDDCX. */
+			regulator-min-microvolt = <1050000>;
+			regulator-max-microvolt = <1050000>;
+			qcom,switch-mode-frequency = <4800000>;
+		};
+
+		v500_s4: s4 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			qcom,switch-mode-frequency = <3200000>;
+			regulator-always-on;
+		};
+
+		v500_l3: l3 {
+			regulator-min-microvolt = <3075000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-allow-set-load;
+			bias-pull-down;
+		};
+
+		v500_l4: l4 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-allow-set-load;
+			bias-pull-down;
+		};
+
+		v500_l5: l5 {
+			regulator-min-microvolt = <2950000>;
+			regulator-max-microvolt = <2950000>;
+			regulator-always-on;
+			bias-pull-down;
+		};
+	};
+};
+
+&sdcc1 {
+	vmmc-supply = <&v500_l5>;
+	vqmmc-supply = <&v500_s4>;
+	/delete-property/ cap-sd-highspeed;
+	max-frequency = <48000000>;
+	status = "okay";
+};
+
+&usb_hs1_phy {
+	extcon = <&v500_usb_vbus>;
+	resets = <&gcc USB_PHY0_RESET>;
+	/* The USB PHY needs the RPM vote for the TCXO D0 output. */
+	clocks = <&sleep_clk>, <&rpmcc RPM_XO_D0>;
+	v3p3-supply = <&v500_l3>;
+	v1p8-supply = <&v500_l4>;
+	/* LG peripheral-mode tuning, encoded as ULPI 0x80 offsets. */
+	qcom,init-seq = /bits/ 8 <0x00 0x44 0x01 0x39 0x02 0x21 0x03 0x33>;
+};
+
+&usb1 {
+	extcon = <&v500_usb_vbus>;
+	vddcx-supply = <&v500_s3>;
+	clocks = <&gcc USB_HS1_H_CLK>, <&rpmcc RPM_DAYTONA_FABRIC_CLK>,
+		 <&gcc USB_HS1_XCVR_CLK>;
+	clock-names = "iface", "core", "fs";
+	dr_mode = "peripheral";
+	status = "okay";
+};
+
+&gsbi7 {
+	qcom,mode = <GSBI_PROT_I2C_UART>;
+	status = "okay";
+};
+
+&gsbi7_serial {
+	pinctrl-names = "default";
+	pinctrl-0 = <&gsbi7_uart_2pins>;
+	status = "okay";
+};

@@ -1,0 +1,161 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "qcom-apq8064-lg-v500-stable.dts"
+#include <dt-bindings/clock/qcom,rpmcc.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/reset/qcom,mmcc-msm8960.h>
+
+/ {
+	v500_lcd_vdd: regulator-lcd-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd-vdd";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&pm8921_gpio 26 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		off-on-delay-us = <400000>;
+	};
+};
+
+&rpm {
+	regulators {
+		vdd_l1_l2_l12_l18-supply = <&v500_s4>;
+		vin_lvs1_3_6-supply = <&v500_s4>;
+
+		v500_l2: l2 {
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-allow-set-load;
+		};
+
+		v500_l15: l15 {
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <3300000>;
+		};
+
+		v500_l21: l21 {
+			regulator-min-microvolt = <1950000>;
+			regulator-max-microvolt = <1950000>;
+		};
+
+		v500_lvs6: lvs6 {
+			bias-pull-down;
+		};
+	};
+};
+
+&gsbi1 {
+	qcom,mode = <GSBI_PROT_I2C>;
+	status = "okay";
+};
+
+&gsbi1_i2c {
+	status = "okay";
+
+	led-controller@38 {
+		compatible = "ti,lm3532";
+		reg = <0x38>;
+		enable-gpios = <&pm8921_gpio 24 GPIO_ACTIVE_HIGH>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@0 {
+			reg = <0>;
+			led-sources = <0 1 2>;
+			ti,led-mode = <0>;
+			led-max-microamp = <20200>;
+			label = "lcd-backlight";
+		};
+	};
+};
+
+&gsbi3 {
+	qcom,mode = <GSBI_PROT_I2C>;
+	status = "okay";
+};
+
+&gsbi3_i2c {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	touchscreen@4b {
+		compatible = "atmel,maxtouch";
+		reg = <0x4b>;
+		interrupt-parent = <&tlmm_pinmux>;
+		interrupts = <6 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm_pinmux 33 GPIO_ACTIVE_LOW>;
+		vdda-supply = <&v500_l15>;
+		vdd-supply = <&v500_l21>;
+	};
+};
+
+&mdp {
+	resets = <&mmcc MDP_RESET>;
+	clocks = <&mmcc MDP_CLK>, <&mmcc MDP_AHB_CLK>, <&mmcc MDP_AXI_CLK>,
+		 <&mmcc MDP_LUT_CLK>, <&mmcc HDMI_TV_CLK>, <&mmcc MDP_TV_CLK>,
+		 <&mmcc LVDS_CLK>, <&rpmcc RPM_PXO_CLK>, <&rpmcc RPM_EBI1_A_CLK>;
+	clock-names = "core_clk", "iface_clk", "bus_clk", "lut_clk", "hdmi_clk",
+		      "tv_clk", "lcdc_clk", "pxo", "ebi1";
+	status = "okay";
+};
+
+&gpu {
+	status = "disabled";
+};
+
+&gpu_opp_table {
+	/delete-node/ opp-450000000;
+	/delete-node/ opp-27000000;
+
+	opp-128000000 {
+		opp-hz = /bits/ 64 <128000000>;
+	};
+
+	opp-200000000 {
+		opp-hz = /bits/ 64 <200000000>;
+	};
+
+	opp-320000000 {
+		opp-hz = /bits/ 64 <320000000>;
+	};
+
+	opp-400000000 {
+		opp-hz = /bits/ 64 <400000000>;
+	};
+};
+
+&mdp_dsi1_out {
+	remote-endpoint = <&dsi0_in>;
+};
+
+&dsi0_in {
+	remote-endpoint = <&mdp_dsi1_out>;
+};
+
+&dsi0 {
+	vdda-supply = <&v500_l2>;
+	avdd-supply = <&v500_lcd_vdd>;
+	vddio-supply = <&v500_lvs6>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "lg,ld083wu1";
+		reg = <0>;
+
+		port {
+			v500_panel_in: endpoint {
+				remote-endpoint = <&dsi0_out>;
+			};
+		};
+	};
+};
+
+&dsi0_out {
+	remote-endpoint = <&v500_panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&dsi0_phy {
+	vddio-supply = <&v500_lvs6>;
+	status = "okay";
+};

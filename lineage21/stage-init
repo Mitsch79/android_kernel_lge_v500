@@ -1,0 +1,97 @@
+#!/v500-m6/busybox sh
+
+bb=/v500-m6/busybox
+stage=/v500-m6/store
+scratch=/v500-m6/data
+
+fail() {
+    printf '<3>v500-m6: %s\n' "$*" >/dev/kmsg
+    /v500-m6/reboot-recovery
+    while :; do "$bb" sleep 10; done
+}
+
+"$bb" mount -t devtmpfs devtmpfs /dev || fail 'Cannot mount devtmpfs'
+IFS= read -r stage_name </v500-m6/stage-name || fail 'Missing image directory in boot image'
+case "$stage_name" in
+    v500-m6|v500-m6-reference) images=$stage/local/tmp/$stage_name ;;
+    *) fail 'Invalid image directory in boot image' ;;
+esac
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ ! -b /dev/mmcblk0p36 ] || break
+    "$bb" sleep 1
+done
+[ -b /dev/mmcblk0p36 ] || fail 'Missing V500 userdata block device'
+"$bb" mount -t ext4 -o rw,nosuid,nodev,noexec /dev/mmcblk0p36 "$stage" ||
+    fail 'Cannot mount the image store'
+
+for image in system vendor data; do
+    [ -f "$images/$image.img" ] && [ -s "$images/$image.img" ] && [ ! -L "$images/$image.img" ] ||
+        fail "Missing regular image: $image.img"
+done
+
+"$bb" losetup -r /dev/loop0 "$images/system.img" || fail 'Cannot map system image'
+"$bb" losetup -r /dev/loop1 "$images/vendor.img" || fail 'Cannot map vendor image'
+"$bb" losetup /dev/loop2 "$images/data.img" || fail 'Cannot map data image'
+
+# Reuse host authorization only from the configured installation.
+# A separately built composition diagnostic may configure Root ADB in loop2.
+if [ -s "$stage/misc/adb/adb_keys" ] || [ -f /v500-m6/composition-adb-root ]; then
+    "$bb" mount -t ext4 -o nosuid,nodev,noexec /dev/loop2 "$scratch" ||
+        fail 'Cannot initialize test userdata'
+    keys=$scratch/misc/adb/adb_keys
+    if [ -s "$stage/misc/adb/adb_keys" ] && [ ! -e "$keys" ]; then
+        "$bb" mkdir -p "$scratch/misc/adb" &&
+            "$bb" chown 1000:2000 "$scratch/misc/adb" &&
+            "$bb" chmod 02750 "$scratch/misc/adb" &&
+            "$bb" cp "$stage/misc/adb/adb_keys" "$keys" &&
+            "$bb" chown 1000:2000 "$keys" &&
+            "$bb" chmod 0640 "$keys" || fail 'Cannot copy ADB authorization into the test image'
+    fi
+    if [ -f /v500-m6/composition-adb-root ]; then
+        [ "$stage_name" = v500-m6 ] &&
+            "$bb" mkdir -p "$scratch/adbroot" && "$bb" chmod 0700 "$scratch/adbroot" &&
+            printf '1\n' > "$scratch/adbroot/enabled" || fail 'Cannot configure test Root ADB'
+    fi
+    "$bb" umount "$scratch" || fail 'Cannot unmount test userdata'
+fi
+
+# Loop devices keep the backing files open. Android initializes its own /dev.
+"$bb" umount -l "$stage" || fail 'Cannot detach the backing mount'
+if [ -f /v500-m6/gpu-boot-keep-active ]; then
+    "$bb" mount -t sysfs sysfs /sys || fail 'Cannot mount sysfs for the GPU power comparison'
+    gpu_power=/sys/bus/platform/devices/4300000.gpu/power/control
+    [ -w "$gpu_power" ] && printf 'on\n' > "$gpu_power" &&
+        read -r gpu_power_mode < "$gpu_power" && [ "$gpu_power_mode" = on ] ||
+        fail 'Cannot keep the Adreno GPU active'
+    printf '<6>v500-m6: Adreno runtime PM control is on before Android init\n' >/dev/kmsg
+    "$bb" umount /sys || fail 'Cannot release bootstrap sysfs mount'
+fi
+if [ -f /v500-m6/graphics-boot-trace ]; then
+    "$bb" mount -t sysfs sysfs /sys || fail 'Cannot mount sysfs for GPU tracing'
+    "$bb" mount -t tracefs tracefs /sys/kernel/tracing || fail 'Cannot mount tracefs for GPU tracing'
+    trace=/sys/kernel/tracing/instances/v500_boot_graphics
+    "$bb" mkdir "$trace" || fail 'Cannot create the boot graphics trace instance'
+    printf '0\n' > "$trace/tracing_on" &&
+        printf 'mono\n' > "$trace/trace_clock" &&
+        printf '512\n' > "$trace/buffer_size_kb" || fail 'Cannot configure the boot graphics trace'
+    for event in \
+        drm_msm_gpu/msm_gpu_submit drm_msm_gpu/msm_gpu_submit_flush drm_msm_gpu/msm_gpu_submit_retired \
+        drm_msm_gpu/msm_gpu_hang_recovery gpu_scheduler/drm_sched_job_add_dep gpu_scheduler/drm_sched_job_run \
+        dma_fence/dma_fence_signaled dma_fence/dma_fence_wait_start dma_fence/dma_fence_wait_end \
+        drm_msm_atomic/msm_atomic_commit_tail_start drm_msm_atomic/msm_atomic_commit_tail_finish \
+        drm_msm_atomic/msm_atomic_wait_flush_start drm_msm_atomic/msm_atomic_wait_flush_finish \
+        drm/drm_vblank_event_delivered iommu/io_page_fault; do
+        printf '1\n' > "$trace/events/$event/enable" || fail "Cannot enable GPU trace event $event"
+    done
+    printf 'traceoff:1\n' > "$trace/events/drm_msm_gpu/msm_gpu_hang_recovery/trigger" &&
+        printf '1\n' > "$trace/tracing_on" &&
+        printf 'V500 graphics trace armed before Android init\n' > "$trace/trace_marker" ||
+        fail 'Cannot arm the first GPU recovery trigger'
+    printf '<6>v500-m6: dedicated boot graphics trace armed\n' >/dev/kmsg
+    "$bb" umount /sys/kernel/tracing && "$bb" umount /sys || fail 'Cannot release bootstrap trace mounts'
+fi
+printf '<6>v500-m6: Android 14 loop devices are ready\n' >/dev/kmsg
+read -r recovery_seconds < /v500-m6/recovery-seconds || fail 'Cannot read the recovery timeout'
+"$bb" umount /dev || fail 'Cannot release bootstrap devtmpfs'
+/v500-m6/reboot-recovery --after "$recovery_seconds" &
+exec /init

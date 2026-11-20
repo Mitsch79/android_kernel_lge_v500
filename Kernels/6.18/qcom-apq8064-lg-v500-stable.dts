@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
+#include "qcom-apq8064-lg-v500-trace.dts"
+
+/* System RAM ranges reported by the LG V500 kernel. Keep the holes out of RAM. */
+/ {
+	memory@80200000 {
+		reg = <0x80200000 0x08600000>,
+		      <0x8a000000 0x03a00000>,
+		      <0x8ec00000 0x00400000>,
+		      <0x8f700000 0x00700000>,
+		      <0x90100000 0x0fd00000>,
+		      <0xa6c00000 0x57500000>,
+		      <0xfff00000 0x000ff000>;
+	};
+
+	chosen {
+		bootargs = "rdinit=/init loglevel=7 printk.time=1 log_buf_len=2M console=ttyMSM0,115200n8 panic=8 v500_usb_console=1";
+	};
+};

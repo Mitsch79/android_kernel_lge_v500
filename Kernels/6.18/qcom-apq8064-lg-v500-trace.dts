@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
+#include "qcom-apq8064-lg-v500.dts"
+
+/ {
+	reserved-memory {
+		/delete-node/ ramoops@88100000;
+
+		/* TWRP 3.7.0_9 reads its legacy non-ECC console at this address. */
+		ramoops@88700000 {
+			compatible = "ramoops";
+			reg = <0x88700000 0x00020000>;
+			console-size = <0x00020000>;
+		};
+	};
+};

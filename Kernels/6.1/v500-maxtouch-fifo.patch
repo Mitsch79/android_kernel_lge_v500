@@ -1,0 +1,44 @@
+diff --git a/drivers/input/touchscreen/atmel_mxt_ts.c b/drivers/input/touchscreen/atmel_mxt_ts.c
+index 8af164077..bbf07ba37 100644
+--- a/drivers/input/touchscreen/atmel_mxt_ts.c
++++ b/drivers/input/touchscreen/atmel_mxt_ts.c
+@@ -1033,6 +1033,9 @@ static int mxt_proc_message(struct mxt_data *data, u8 *message)
+ static int mxt_read_and_process_messages(struct mxt_data *data, u8 count)
+ {
+ 	struct device *dev = &data->client->dev;
++	const struct i2c_adapter_quirks *quirks = data->client->adapter->quirks;
++	unsigned int batch_limit = count;
++	unsigned int offset = 0;
+ 	int ret;
+ 	int i;
+ 	u8 num_valid = 0;
+@@ -1041,12 +1044,23 @@ static int mxt_read_and_process_messages(struct mxt_data *data, u8 count)
+ 	if (count > data->max_reportid)
+ 		return -EINVAL;
+ 
+-	/* Process remaining messages if necessary */
+-	ret = __mxt_read_reg(data->client, data->T5_address,
+-				data->T5_msg_size * count, data->msg_buf);
+-	if (ret) {
+-		dev_err(dev, "Failed to read %u messages (%d)\n", count, ret);
+-		return ret;
++	/* T5 is a FIFO. Start every whole-message batch at its register. */
++	if (quirks && quirks->max_read_len) {
++		if (!data->T5_msg_size || data->T5_msg_size > quirks->max_read_len)
++			return -EOPNOTSUPP;
++		batch_limit = quirks->max_read_len / data->T5_msg_size;
++	}
++	while (offset < count) {
++		unsigned int batch = min_t(unsigned int, count - offset, batch_limit);
++
++		ret = __mxt_read_reg(data->client, data->T5_address,
++				     data->T5_msg_size * batch,
++				     data->msg_buf + offset * data->T5_msg_size);
++		if (ret) {
++			dev_err(dev, "Failed to read %u messages (%d)\n", batch, ret);
++			return ret;
++		}
++		offset += batch;
+ 	}
+ 
+ 	for (i = 0;  i < count; i++) {

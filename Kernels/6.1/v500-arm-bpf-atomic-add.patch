@@ -1,0 +1,69 @@
+diff --git a/arch/arm/net/bpf_jit_32.c b/arch/arm/net/bpf_jit_32.c
+index 2292245cf..edc68a6d1 100644
+--- a/arch/arm/net/bpf_jit_32.c
++++ b/arch/arm/net/bpf_jit_32.c
+@@ -6,6 +6,7 @@
+  * Copyright (c) 2011 Mircea Gherzan <mgherzan@gmail.com>
+  */
+ 
++#include <linux/atomic.h>
+ #include <linux/bpf.h>
+ #include <linux/bitops.h>
+ #include <linux/compiler.h>
+@@ -1269,6 +1270,42 @@ static inline void emit_rev32(const u8 rd, const u8 rn, struct jit_ctx *ctx)
+ }
+ 
+ // push the scratch stack register on top of the stack
++/* The ARM EABI passes the aligned 64-bit second argument in r2:r3. */
++static u64 jit_atomic_add32(void *addr, u64 value)
++{
++	return (u32)atomic_fetch_add((int)value, (atomic_t *)addr);
++}
++
++static u64 jit_atomic_add64(void *addr, u64 value)
++{
++	return atomic64_fetch_add(value, (atomic64_t *)addr);
++}
++
++static void emit_atomic_add(const s8 dst[], const s8 src[], s16 off,
++			    bool wide, bool fetch, struct jit_ctx *ctx)
++{
++	const s8 *addr = bpf2a32[TMP_REG_1];
++	const s8 *value = bpf2a32[TMP_REG_2];
++	const s8 *r0 = bpf2a32[BPF_REG_0];
++	const s8 *r1 = bpf2a32[BPF_REG_1];
++	s8 base = arm_bpf_get_reg32(dst[1], addr[1], ctx);
++
++	/* Capture both operands before replacing any mapped BPF register. */
++	emit_mov_i(addr[0], (s32)off, ctx);
++	emit(ARM_ADD_R(addr[1], base, addr[0]), ctx);
++	emit_a32_mov_r64(true, value, src, ctx);
++	emit(ARM_PUSH(CALLER_MASK), ctx);
++	emit(ARM_MOV_R(ARM_R0, addr[1]), ctx);
++	emit_a32_mov_r64(true, r1, value, ctx);
++	emit_mov_i(ARM_IP, wide ? (u32)jit_atomic_add64 : (u32)jit_atomic_add32, ctx);
++	emit_blx_r(ARM_IP, ctx);
++	if (fetch)
++		emit_a32_mov_r64(true, value, r0, ctx);
++	emit(ARM_POP(CALLER_MASK), ctx);
++	if (fetch)
++		emit_a32_mov_r64(true, src, value, ctx);
++}
++
+ static inline void emit_push_r64(const s8 src[], struct jit_ctx *ctx)
+ {
+ 	const s8 *tmp2 = bpf2a32[TMP_REG_2];
+@@ -1633,7 +1670,12 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
+ 	/* Atomic ops */
+ 	case BPF_STX | BPF_ATOMIC | BPF_W:
+ 	case BPF_STX | BPF_ATOMIC | BPF_DW:
+-		goto notyet;
++		if (!IS_ENABLED(CONFIG_AEABI) || IS_ENABLED(CONFIG_CPU_BIG_ENDIAN) ||
++		    (imm != BPF_ADD && imm != (BPF_ADD | BPF_FETCH)))
++			goto notyet;
++		emit_atomic_add(dst, src, off, BPF_SIZE(code) == BPF_DW,
++				imm & BPF_FETCH, ctx);
++		break;
+ 	/* STX: *(size *)(dst + off) = src */
+ 	case BPF_STX | BPF_MEM | BPF_W:
+ 	case BPF_STX | BPF_MEM | BPF_H:

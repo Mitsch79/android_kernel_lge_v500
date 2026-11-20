@@ -1,0 +1,1129 @@
+diff --git a/Documentation/devicetree/bindings/display/msm/mdp4.yaml b/Documentation/devicetree/bindings/display/msm/mdp4.yaml
+index 58c13f527..e461aedc4 100644
+--- a/Documentation/devicetree/bindings/display/msm/mdp4.yaml
++++ b/Documentation/devicetree/bindings/display/msm/mdp4.yaml
+@@ -18,9 +18,10 @@ properties:
+ 
+   clocks:
+     minItems: 6
+-    maxItems: 6
++    maxItems: 7
+ 
+   clock-names:
++    minItems: 6
+     items:
+       - const: core_clk
+       - const: iface_clk
+@@ -28,6 +29,7 @@ properties:
+       - const: lut_clk
+       - const: hdmi_clk
+       - const: tv_clk
++      - const: ebi1
+ 
+   reg:
+     maxItems: 1
+@@ -35,6 +37,10 @@ properties:
+   interrupts:
+     maxItems: 1
+ 
++  resets:
++    maxItems: 1
++    description: Reset for the MDP core.
++
+   iommus:
+     maxItems: 4
+ 
+diff --git a/drivers/clk/qcom/clk-rpm.c b/drivers/clk/qcom/clk-rpm.c
+index 747c473b0..addefc387 100644
+--- a/drivers/clk/qcom/clk-rpm.c
++++ b/drivers/clk/qcom/clk-rpm.c
+@@ -330,8 +330,10 @@ static int clk_rpm_set_rate(struct clk_hw *hw,
+ 
+ 	mutex_lock(&rpm_clk_lock);
+ 
+-	if (!r->enabled)
++	if (!r->enabled) {
++		r->rate = rate;
+ 		goto out;
++	}
+ 
+ 	to_active_sleep(r, rate, &this_rate, &this_sleep_rate);
+ 
+diff --git a/drivers/clk/qcom/gcc-msm8960.c b/drivers/clk/qcom/gcc-msm8960.c
+index 9dd4e7ffa..ff4299f28 100644
+--- a/drivers/clk/qcom/gcc-msm8960.c
++++ b/drivers/clk/qcom/gcc-msm8960.c
+@@ -3663,6 +3663,7 @@ static const struct qcom_reset_map gcc_apq8064_resets[] = {
+ 	[MPM_H_RESET] = { 0x2da0, 7 },
+ 	[MPM_RESET] = { 0x2da4 },
+ 	[SFAB_SMPSS_S_RESET] = { 0x2e00, 7 },
++	[USB_PHY0_RESET] = { .reg = 0x2e20, .udelay = 10000 },
+ 	[PRNG_RESET] = { 0x2e80, 12 },
+ 	[RIVA_RESET] = { 0x35e0 },
+ 	[CE3_H_RESET] = { 0x36c4, 7 },
+diff --git a/drivers/clk/qcom/reset.h b/drivers/clk/qcom/reset.h
+index 9a47c838d..fe0561bf5 100644
+--- a/drivers/clk/qcom/reset.h
++++ b/drivers/clk/qcom/reset.h
+@@ -11,7 +11,7 @@
+ struct qcom_reset_map {
+ 	unsigned int reg;
+ 	u8 bit;
+-	u8 udelay;
++	u16 udelay;
+ 	u32 bitmask;
+ };
+ 
+diff --git a/drivers/extcon/Kconfig b/drivers/extcon/Kconfig
+index e54e5e64d..b18dd671b 100644
+--- a/drivers/extcon/Kconfig
++++ b/drivers/extcon/Kconfig
+@@ -15,6 +15,13 @@ if EXTCON
+ 
+ comment "Extcon Device Drivers"
+ 
++config EXTCON_PM8921_USB
++	tristate "Qualcomm PM8921 USB VBUS detection"
++	depends on MFD_PM8XXX && OF
++	help
++	  Report the PM8921 USBIN_VALID signal to USB peripheral
++	  controllers and PHYs that use the PMIC for VBUS detection.
++
+ config EXTCON_ADC_JACK
+ 	tristate "ADC Jack extcon support"
+ 	depends on IIO
+diff --git a/drivers/extcon/Makefile b/drivers/extcon/Makefile
+index 1b390d934..add57057a 100644
+--- a/drivers/extcon/Makefile
++++ b/drivers/extcon/Makefile
+@@ -5,6 +5,7 @@
+ 
+ obj-$(CONFIG_EXTCON)		+= extcon-core.o
+ extcon-core-objs		+= extcon.o devres.o
++obj-$(CONFIG_EXTCON_PM8921_USB)	+= extcon-pm8921-usb.o
+ obj-$(CONFIG_EXTCON_ADC_JACK)	+= extcon-adc-jack.o
+ obj-$(CONFIG_EXTCON_AXP288)	+= extcon-axp288.o
+ obj-$(CONFIG_EXTCON_FSA9480)	+= extcon-fsa9480.o
+diff --git a/drivers/gpu/drm/msm/adreno/a3xx.xml.h b/drivers/gpu/drm/msm/adreno/a3xx.xml.h
+index 520ae3f37..1e5b22c0c 100644
+--- a/drivers/gpu/drm/msm/adreno/a3xx.xml.h
++++ b/drivers/gpu/drm/msm/adreno/a3xx.xml.h
+@@ -2780,6 +2780,9 @@ static inline uint32_t A3XX_TPL1_TP_FS_TEX_OFFSET_BASETABLEPTR(uint32_t val)
+ 
+ #define REG_A3XX_VBIF_OUT_AXI_AOOO				0x0000305f
+ 
++#define REG_A3XX_VBIF_XIN_HALT_CTRL0				0x00003080
++#define REG_A3XX_VBIF_XIN_HALT_CTRL1				0x00003081
++
+ #define REG_A3XX_VBIF_PERF_CNT_EN				0x00003070
+ #define A3XX_VBIF_PERF_CNT_EN_CNT0				0x00000001
+ #define A3XX_VBIF_PERF_CNT_EN_CNT1				0x00000002
+diff --git a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+index 2c8b98996..6eab560b3 100644
+--- a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+@@ -25,6 +25,8 @@
+ 
+ extern bool hang_debug;
+ 
++#define A3XX_VBIF_XIN_HALT_CTRL0_MASK	GENMASK(5, 0)
++
+ static void a3xx_dump(struct msm_gpu *gpu);
+ static bool a3xx_idle(struct msm_gpu *gpu);
+ 
+@@ -477,6 +479,38 @@ static struct msm_gpu_state *a3xx_gpu_state_get(struct msm_gpu *gpu)
+ 	return state;
+ }
+ 
++static int a3xx_vbif_halt(struct msm_gpu *gpu)
++{
++	u32 ack;
++	int ret;
++
++	gpu_write(gpu, REG_A3XX_VBIF_XIN_HALT_CTRL0,
++		  A3XX_VBIF_XIN_HALT_CTRL0_MASK);
++	ret = spin_until(((ack = gpu_read(gpu, REG_A3XX_VBIF_XIN_HALT_CTRL1)) &
++			  A3XX_VBIF_XIN_HALT_CTRL0_MASK) ==
++			 A3XX_VBIF_XIN_HALT_CTRL0_MASK);
++	gpu_write(gpu, REG_A3XX_VBIF_XIN_HALT_CTRL0, 0);
++
++	if (ret)
++		return -EBUSY;
++
++	return 0;
++}
++
++static int a3xx_pm_suspend(struct msm_gpu *gpu)
++{
++	int ret;
++
++	if (!a3xx_idle(gpu))
++		return -EBUSY;
++
++	ret = a3xx_vbif_halt(gpu);
++	if (ret)
++		return ret;
++
++	return msm_gpu_pm_suspend(gpu);
++}
++
+ static u32 a3xx_get_rptr(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
+ {
+ 	ring->memptrs->rptr = gpu_read(gpu, REG_AXXX_CP_RB_RPTR);
+@@ -488,7 +522,7 @@ static const struct adreno_gpu_funcs funcs = {
+ 		.get_param = adreno_get_param,
+ 		.set_param = adreno_set_param,
+ 		.hw_init = a3xx_hw_init,
+-		.pm_suspend = msm_gpu_pm_suspend,
++		.pm_suspend = a3xx_pm_suspend,
+ 		.pm_resume = msm_gpu_pm_resume,
+ 		.recover = a3xx_recover,
+ 		.submit = a3xx_submit,
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
+index 310095722..986815190 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_crtc.c
+@@ -279,11 +279,13 @@ static void mdp4_crtc_atomic_disable(struct drm_crtc *crtc,
+ 	/* Disable/save vblank irq handling before power is disabled */
+ 	drm_crtc_vblank_off(crtc);
+ 
++	/* No further scanout can retire a previously queued page flip. */
++	atomic_andnot(PENDING_FLIP, &mdp4_crtc->pending);
++	complete_flip(crtc, NULL);
+ 	mdp_irq_unregister(&mdp4_kms->base, &mdp4_crtc->err);
+ 	mdp4_disable(mdp4_kms);
+ 
+ 	if (crtc->state->event && !crtc->state->active) {
+-		WARN_ON(mdp4_crtc->event);
+ 		spin_lock_irqsave(&mdp4_kms->dev->event_lock, flags);
+ 		drm_crtc_send_vblank_event(crtc, crtc->state->event);
+ 		crtc->state->event = NULL;
+@@ -341,6 +343,17 @@ static void mdp4_crtc_atomic_flush(struct drm_crtc *crtc,
+ 
+ 	DBG("%s: event: %p", mdp4_crtc->name, crtc->state->event);
+ 
++	/* commit_planes may flush a disabled CRTC. It cannot generate vblank. */
++	if (!crtc->state->active) {
++		spin_lock_irqsave(&dev->event_lock, flags);
++		if (crtc->state->event) {
++			drm_crtc_send_vblank_event(crtc, crtc->state->event);
++			crtc->state->event = NULL;
++		}
++		spin_unlock_irqrestore(&dev->event_lock, flags);
++		return;
++	}
++
+ 	WARN_ON(mdp4_crtc->event);
+ 
+ 	spin_lock_irqsave(&dev->event_lock, flags);
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_dsi_encoder.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_dsi_encoder.c
+index 39b8fe53c..435955735 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_dsi_encoder.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_dsi_encoder.c
+@@ -6,6 +6,8 @@
+  * Author: Vinay Simha <vinaysimha@inforcecomputing.com>
+  */
+ 
++#include <linux/of.h>
++
+ #include <drm/drm_crtc.h>
+ #include <drm/drm_probe_helper.h>
+ 
+@@ -92,7 +94,7 @@ static void mdp4_dsi_encoder_mode_set(struct drm_encoder *encoder,
+ 	mdp4_write(mdp4_kms, REG_MDP4_DSI_ACTIVE_VEND, 0);
+ }
+ 
+-static void mdp4_dsi_encoder_disable(struct drm_encoder *encoder)
++void mdp4_dsi_encoder_stop(struct drm_encoder *encoder)
+ {
+ 	struct mdp4_dsi_encoder *mdp4_dsi_encoder = to_mdp4_dsi_encoder(encoder);
+ 	struct mdp4_kms *mdp4_kms = get_kms(encoder);
+@@ -115,10 +117,17 @@ static void mdp4_dsi_encoder_disable(struct drm_encoder *encoder)
+ 	mdp4_dsi_encoder->enabled = false;
+ }
+ 
++void mdp4_dsi_encoder_start(struct drm_encoder *encoder)
++{
++	struct mdp4_kms *mdp4_kms = get_kms(encoder);
++
++	mdp4_write(mdp4_kms, REG_MDP4_DSI_ENABLE, 1);
++
++}
++
+ static void mdp4_dsi_encoder_enable(struct drm_encoder *encoder)
+ {
+ 	struct mdp4_dsi_encoder *mdp4_dsi_encoder = to_mdp4_dsi_encoder(encoder);
+-	struct mdp4_kms *mdp4_kms = get_kms(encoder);
+ 
+ 	if (mdp4_dsi_encoder->enabled)
+ 		return;
+@@ -134,14 +143,16 @@ static void mdp4_dsi_encoder_enable(struct drm_encoder *encoder)
+ 
+ 	mdp4_crtc_set_intf(encoder->crtc, INTF_DSI_VIDEO, 0);
+ 
+-	mdp4_write(mdp4_kms, REG_MDP4_DSI_ENABLE, 1);
++	/* The V500 bridge starts MDP4 after enabling the DSI video host. */
++	if (!of_machine_is_compatible("lg,v500"))
++		mdp4_dsi_encoder_start(encoder);
+ 
+ 	mdp4_dsi_encoder->enabled = true;
+ }
+ 
+ static const struct drm_encoder_helper_funcs mdp4_dsi_encoder_helper_funcs = {
+ 	.mode_set = mdp4_dsi_encoder_mode_set,
+-	.disable = mdp4_dsi_encoder_disable,
++	.disable = mdp4_dsi_encoder_stop,
+ 	.enable = mdp4_dsi_encoder_enable,
+ };
+ 
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
+index 964573d26..27cf684eb 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/delay.h>
++#include <linux/reset.h>
+ 
+ #include <drm/drm_vblank.h>
+ 
+@@ -381,6 +382,31 @@ static void read_mdp_hw_revision(struct mdp4_kms *mdp4_kms,
+ 	DRM_DEV_INFO(dev->dev, "MDP4 version v%d.%d", *major, *minor);
+ }
+ 
++static void mdp4_put_ebi1_vote(void *data)
++{
++	clk_disable_unprepare(data);
++}
++
++static int mdp4_v500_vote_ebi1(struct device *dev)
++{
++	struct clk *ebi1 = devm_clk_get(dev, "ebi1");
++	int ret;
++
++	if (IS_ERR(ebi1))
++		return PTR_ERR(ebi1);
++
++	ret = clk_set_rate(ebi1, 533000000);
++	if (ret)
++		return ret;
++	ret = clk_prepare_enable(ebi1);
++	if (ret)
++		return ret;
++	ret = devm_add_action_or_reset(dev, mdp4_put_ebi1_vote, ebi1);
++	if (!ret)
++		dev_info(dev, "V500 EBI1 active vote: %lu Hz\n", clk_get_rate(ebi1));
++	return ret;
++}
++
+ static int mdp4_kms_init(struct drm_device *dev)
+ {
+ 	struct platform_device *pdev = to_platform_device(dev->dev);
+@@ -392,6 +418,7 @@ static int mdp4_kms_init(struct drm_device *dev)
+ 	int irq, ret;
+ 	u32 major, minor;
+ 	unsigned long max_clk;
++	bool v500 = of_machine_is_compatible("lg,v500");
+ 
+ 	/* TODO: Chips that aren't apq8064 have a 200 Mhz max_clk */
+ 	max_clk = 266667000;
+@@ -412,6 +439,16 @@ static int mdp4_kms_init(struct drm_device *dev)
+ 	kms = priv->kms;
+ 
+ 	mdp4_kms->dev = dev;
++	if (v500) {
++		mdp4_kms->reset = devm_reset_control_get_exclusive(&pdev->dev, NULL);
++		if (IS_ERR(mdp4_kms->reset)) {
++			ret = PTR_ERR(mdp4_kms->reset);
++			goto fail;
++		}
++		ret = mdp4_v500_vote_ebi1(&pdev->dev);
++		if (ret)
++			goto fail;
++	}
+ 
+ 	mdp4_kms->mmio = msm_ioremap(pdev, NULL);
+ 	if (IS_ERR(mdp4_kms->mmio)) {
+@@ -493,11 +530,23 @@ static int mdp4_kms_init(struct drm_device *dev)
+ 	 * we don't disable):
+ 	 */
+ 	mdp4_enable(mdp4_kms);
++
+ 	mdp4_write(mdp4_kms, REG_MDP4_DTV_ENABLE, 0);
+ 	mdp4_write(mdp4_kms, REG_MDP4_LCDC_ENABLE, 0);
+ 	mdp4_write(mdp4_kms, REG_MDP4_DSI_ENABLE, 0);
++
++	if (v500) {
++		/* Let the bootloader's last frame finish with the clocks running. */
++		msleep(20);
++
++	}
++	/* Reinitialize the core after quiescing firmware scanout. */
++	ret = reset_control_reset(mdp4_kms->reset);
+ 	mdp4_disable(mdp4_kms);
+-	mdelay(16);
++	if (ret)
++		goto fail;
++	if (!v500)
++		mdelay(16);
+ 
+ 	iommu = iommu_domain_alloc(pdev->dev.bus);
+ 	if (iommu) {
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.h b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.h
+index 01179e764..e7e0b9087 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.h
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_kms.h
+@@ -24,6 +24,7 @@ struct mdp4_kms {
+ 	int rev;
+ 
+ 	void __iomem *mmio;
++	struct reset_control *reset;
+ 
+ 	struct regulator *vdd;
+ 
+diff --git a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
+index b689b618d..6b7774b67 100644
+--- a/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
++++ b/drivers/gpu/drm/msm/disp/mdp4/mdp4_plane.c
+@@ -4,6 +4,8 @@
+  * Author: Rob Clark <robdclark@gmail.com>
+  */
+ 
++#include <linux/math64.h>
++
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_damage_helper.h>
+ #include <drm/drm_fourcc.h>
+@@ -266,6 +268,8 @@ static int mdp4_plane_mode_set(struct drm_plane *plane,
+ 	if (src_w != crtc_w) {
+ 		uint32_t sel_unit = SCALE_FIR;
+ 		op_mode |= MDP4_PIPE_OP_MODE_SCALEX_EN;
++		phasex_step = min_t(u64, U32_MAX,
++				    div_u64((u64)src_w << 29, crtc_w));
+ 
+ 		if (MDP_FORMAT_IS_YUV(format)) {
+ 			if (crtc_w > src_w)
+@@ -274,14 +278,14 @@ static int mdp4_plane_mode_set(struct drm_plane *plane,
+ 				sel_unit = SCALE_MN_PHASE;
+ 
+ 			op_mode |= MDP4_PIPE_OP_MODE_SCALEX_UNIT_SEL(sel_unit);
+-			phasex_step = mult_frac(MDP4_VG_PHASE_STEP_DEFAULT,
+-					src_w, crtc_w);
+ 		}
+ 	}
+ 
+ 	if (src_h != crtc_h) {
+ 		uint32_t sel_unit = SCALE_FIR;
+ 		op_mode |= MDP4_PIPE_OP_MODE_SCALEY_EN;
++		phasey_step = min_t(u64, U32_MAX,
++				    div_u64((u64)src_h << 29, crtc_h));
+ 
+ 		if (MDP_FORMAT_IS_YUV(format)) {
+ 
+@@ -291,8 +295,6 @@ static int mdp4_plane_mode_set(struct drm_plane *plane,
+ 				sel_unit = SCALE_MN_PHASE;
+ 
+ 			op_mode |= MDP4_PIPE_OP_MODE_SCALEY_UNIT_SEL(sel_unit);
+-			phasey_step = mult_frac(MDP4_VG_PHASE_STEP_DEFAULT,
+-					src_h, crtc_h);
+ 		}
+ 	}
+ 
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_manager.c b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+index f9e6cbd9e..9c1c725fb 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_manager.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_manager.c
+@@ -3,6 +3,8 @@
+  * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+  */
+ 
++#include <linux/pm_runtime.h>
++
+ #include "drm/drm_bridge_connector.h"
+ 
+ #include "msm_kms.h"
+@@ -282,6 +284,10 @@ static void dsi_mgr_bridge_power_on(struct drm_bridge *bridge)
+ 	if (is_bonded_dsi && !IS_MASTER_DSI_LINK(id))
+ 		return;
+ 
++	if (of_machine_is_compatible("lg,v500") &&
++	    pm_runtime_resume_and_get(&msm_dsi->pdev->dev) < 0)
++		return;
++
+ 	ret = dsi_mgr_phy_enable(id, phy_shared_timings);
+ 	if (ret)
+ 		goto phy_en_fail;
+@@ -309,15 +315,58 @@ static void dsi_mgr_bridge_power_on(struct drm_bridge *bridge)
+ 	msm_dsi_host_enable_irq(host);
+ 	if (is_bonded_dsi && msm_dsi1)
+ 		msm_dsi_host_enable_irq(msm_dsi1->host);
+-
+-	return;
++	goto put_host;
+ 
+ host1_on_fail:
+ 	msm_dsi_host_power_off(host);
+ host_on_fail:
+ 	dsi_mgr_phy_disable(id);
+ phy_en_fail:
+-	return;
++put_host:
++	if (of_machine_is_compatible("lg,v500"))
++		pm_runtime_put(&msm_dsi->pdev->dev);
++}
++
++/*
++ * The V500 bootloader leaves the display in video mode. Bring up the
++ * command link first so the LD083WU1 init commands can complete before
++ * the video engine is allowed to consume pixels from the MDP4.
++ */
++static bool dsi_mgr_v500_video(void)
++{
++	return of_machine_is_compatible("lg,v500");
++}
++
++static void dsi_mgr_bridge_enable(struct drm_bridge *bridge)
++{
++	struct msm_dsi *msm_dsi = dsi_mgr_get_dsi(dsi_mgr_bridge_get_id(bridge));
++	int ret;
++
++	if (!dsi_mgr_v500_video() || !msm_dsi->phy_enabled)
++		return;
++	ret = msm_dsi_host_enable(msm_dsi->host);
++	if (ret) {
++		dev_err(&msm_dsi->pdev->dev, "Video enable failed: %d\n", ret);
++		return;
++	}
++
++	/* Start the pixel source once the V500 host can consume video. */
++	mdp4_dsi_encoder_start(bridge->encoder);
++}
++
++static void dsi_mgr_bridge_disable(struct drm_bridge *bridge)
++{
++	struct msm_dsi *msm_dsi = dsi_mgr_get_dsi(dsi_mgr_bridge_get_id(bridge));
++	int ret;
++
++	if (!dsi_mgr_v500_video() || !msm_dsi->phy_enabled)
++		return;
++
++	/* Stop scanout at the last VSYNC before allowing panel DCS commands. */
++	mdp4_dsi_encoder_stop(bridge->encoder);
++	ret = msm_dsi_host_disable(msm_dsi->host);
++	if (ret)
++		dev_err(&msm_dsi->pdev->dev, "Video disable failed: %d\n", ret);
+ }
+ 
+ static void dsi_mgr_bridge_pre_enable(struct drm_bridge *bridge)
+@@ -340,12 +389,16 @@ static void dsi_mgr_bridge_pre_enable(struct drm_bridge *bridge)
+ 	if (!dsi_mgr_power_on_early(bridge))
+ 		dsi_mgr_bridge_power_on(bridge);
+ 
++	if (dsi_mgr_v500_video())
++		return;
++
+ 	ret = msm_dsi_host_enable(host);
+ 	if (ret) {
+ 		pr_err("%s: enable host %d failed, %d\n", __func__, id, ret);
+ 		goto host_en_fail;
+ 	}
+ 
++
+ 	if (is_bonded_dsi && msm_dsi1) {
+ 		ret = msm_dsi_host_enable(msm_dsi1->host);
+ 		if (ret) {
+@@ -398,9 +451,14 @@ static void dsi_mgr_bridge_post_disable(struct drm_bridge *bridge)
+ 	if (is_bonded_dsi && !IS_MASTER_DSI_LINK(id))
+ 		goto disable_phy;
+ 
+-	ret = msm_dsi_host_disable(host);
+-	if (ret)
+-		pr_err("%s: host %d disable failed, %d\n", __func__, id, ret);
++	if (dsi_mgr_v500_video()) {
++		if (!msm_dsi->phy_enabled)
++			return;
++	} else {
++		ret = msm_dsi_host_disable(host);
++		if (ret)
++			pr_err("%s: host %d disable failed, %d\n", __func__, id, ret);
++	}
+ 
+ 	if (is_bonded_dsi && msm_dsi1) {
+ 		ret = msm_dsi_host_disable(msm_dsi1->host);
+@@ -466,6 +524,8 @@ static enum drm_mode_status dsi_mgr_bridge_mode_valid(struct drm_bridge *bridge,
+ 
+ static const struct drm_bridge_funcs dsi_mgr_bridge_funcs = {
+ 	.pre_enable = dsi_mgr_bridge_pre_enable,
++	.enable = dsi_mgr_bridge_enable,
++	.disable = dsi_mgr_bridge_disable,
+ 	.post_disable = dsi_mgr_bridge_post_disable,
+ 	.mode_set = dsi_mgr_bridge_mode_set,
+ 	.mode_valid = dsi_mgr_bridge_mode_valid,
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_28nm_8960.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_28nm_8960.c
+index 26c08047e..e9597a7d6 100644
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_28nm_8960.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_28nm_8960.c
+@@ -596,6 +596,23 @@ static int dsi_28nm_phy_enable(struct msm_dsi_phy *phy,
+ 		return -EINVAL;
+ 	}
+ 
++	/* LG's LD083WU1 timing table for a nominal 933 Mb/s per lane. */
++	if (of_machine_is_compatible("lg,v500")) {
++		timing->clk_zero = 0xf9;
++		timing->clk_trail = 0x9b;
++		timing->clk_prepare = 0x3d;
++		timing->hs_exit = 0x44;
++		timing->hs_zero = 0xde;
++		timing->hs_prepare = 0x40;
++		timing->hs_trail = 0x9d;
++		timing->hs_rqst = 0x44;
++		timing->ta_go = 3;
++		timing->ta_sure = 0;
++		timing->ta_get = 4;
++		timing->shared_timings.clk_pre = 0x38;
++		timing->shared_timings.clk_post = 0x20;
++	}
++
+ 	dsi_28nm_phy_regulator_init(phy);
+ 
+ 	dsi_phy_write(base + REG_DSI_28nm_8960_PHY_LDO_CTRL, 0x04);
+diff --git a/drivers/gpu/drm/msm/msm_drv.h b/drivers/gpu/drm/msm/msm_drv.h
+index 81deb112e..9951b1532 100644
+--- a/drivers/gpu/drm/msm/msm_drv.h
++++ b/drivers/gpu/drm/msm/msm_drv.h
+@@ -326,6 +326,14 @@ static inline void __init msm_hdmi_register(void) {}
+ static inline void __exit msm_hdmi_unregister(void) {}
+ #endif
+ 
++#ifdef CONFIG_DRM_MSM_MDP4
++void mdp4_dsi_encoder_start(struct drm_encoder *encoder);
++void mdp4_dsi_encoder_stop(struct drm_encoder *encoder);
++#else
++static inline void mdp4_dsi_encoder_start(struct drm_encoder *encoder) {}
++static inline void mdp4_dsi_encoder_stop(struct drm_encoder *encoder) {}
++#endif
++
+ struct msm_dsi;
+ #ifdef CONFIG_DRM_MSM_DSI
+ int dsi_dev_attach(struct platform_device *pdev);
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index a582ddd58..a2bcf0198 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -272,6 +272,12 @@ config DRM_PANEL_SAMSUNG_LD9040
+ 	depends on OF && SPI
+ 	select VIDEOMODE_HELPERS
+ 
++config DRM_PANEL_LG_LD083WU1
++	tristate "LG Display LD083WU1 panel"
++	depends on OF && DRM_MIPI_DSI
++	help
++	  Enable the 1200x1920 MIPI DSI panel in the LG G Pad 8.3 V500.
++
+ config DRM_PANEL_LG_LB035Q02
+ 	tristate "LG LB035Q024573 RGB panel"
+ 	depends on GPIOLIB && OF && SPI
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index 34e717382..7953e1f76 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -24,6 +24,7 @@ obj-$(CONFIG_DRM_PANEL_KHADAS_TS050) += panel-khadas-ts050.o
+ obj-$(CONFIG_DRM_PANEL_KINGDISPLAY_KD097D04) += panel-kingdisplay-kd097d04.o
+ obj-$(CONFIG_DRM_PANEL_LEADTEK_LTK050H3146W) += panel-leadtek-ltk050h3146w.o
+ obj-$(CONFIG_DRM_PANEL_LEADTEK_LTK500HD1829) += panel-leadtek-ltk500hd1829.o
++obj-$(CONFIG_DRM_PANEL_LG_LD083WU1) += panel-lg-ld083wu1.o
+ obj-$(CONFIG_DRM_PANEL_LG_LB035Q02) += panel-lg-lb035q02.o
+ obj-$(CONFIG_DRM_PANEL_LG_LG4573) += panel-lg-lg4573.o
+ obj-$(CONFIG_DRM_PANEL_NEC_NL8048HL11) += panel-nec-nl8048hl11.o
+diff --git a/drivers/gpu/drm/panel/panel-lg-ld083wu1.c b/drivers/gpu/drm/panel/panel-lg-ld083wu1.c
+new file mode 100644
+index 000000000..a042fe669
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-lg-ld083wu1.c
+@@ -0,0 +1,154 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * LG Display LD083WU1 on the LG V500.
++ * Timing and DCS commands from the V500 GPL kernel's
++ * mipi_lgit_video_wuxga_pt.c and board-awifi-display.c.
++ */
++
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/of.h>
++
++#include <drm/drm_connector.h>
++#include <drm/drm_mipi_dsi.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++#include <video/mipi_display.h>
++
++static const struct drm_display_mode ld083wu1_mode = {
++	/* The APQ8064 DSI PLL can generate 155 MHz on its clock grid. */
++	.clock = 155000,
++	.hdisplay = 1200,
++	.hsync_start = 1200 + 44,
++	.hsync_end = 1200 + 44 + 32,
++	.htotal = 1200 + 44 + 32 + 60,
++	.vdisplay = 1920,
++	.vsync_start = 1920 + 5,
++	.vsync_end = 1920 + 5 + 5,
++	.vtotal = 1920 + 5 + 5 + 10,
++	.width_mm = 112,
++	.height_mm = 179,
++};
++
++static int ld083wu1_prepare(struct drm_panel *panel)
++{
++	struct mipi_dsi_device *dsi = to_mipi_dsi_device(panel->dev);
++	int ret;
++	u8 status;
++
++	/* Match the LG power-on delay after the host has enabled its rails. */
++	msleep(180);
++	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_SET_ADDRESS_MODE, 0x40);
++	ret = mipi_dsi_dcs_set_pixel_format(dsi, 0x70);
++	if (ret < 0)
++		return ret;
++	mipi_dsi_dcs_write_seq(dsi, 0xbb, 0xff);
++	mipi_dsi_dcs_write_seq(dsi, 0xb9, 0x00);
++	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
++	if (ret < 0)
++		return ret;
++	msleep(120);
++	ret = mipi_dsi_dcs_set_display_on(dsi);
++	if (ret < 0)
++		return ret;
++
++	ret = mipi_dsi_dcs_get_power_mode(dsi, &status);
++	if (ret < 0)
++		dev_warn(panel->dev, "LD083WU1 init sent, power-mode read failed: %d\n", ret);
++	else
++		dev_info(panel->dev, "LD083WU1 power mode after init: %#02x\n", status);
++
++	return 0;
++}
++
++static int ld083wu1_disable(struct drm_panel *panel)
++{
++	struct mipi_dsi_device *dsi = to_mipi_dsi_device(panel->dev);
++
++	int ret;
++
++	ret = mipi_dsi_dcs_set_display_off(dsi);
++	if (ret < 0)
++		return ret;
++	ret = mipi_dsi_dcs_enter_sleep_mode(dsi);
++	if (ret < 0)
++		return ret;
++	msleep(120);
++
++	return 0;
++}
++
++static int ld083wu1_get_modes(struct drm_panel *panel,
++			     struct drm_connector *connector)
++{
++	struct drm_display_mode *mode;
++
++	mode = drm_mode_duplicate(connector->dev, &ld083wu1_mode);
++	if (!mode)
++		return -ENOMEM;
++
++	drm_mode_set_name(mode);
++	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
++	drm_mode_probed_add(connector, mode);
++	connector->display_info.width_mm = mode->width_mm;
++	connector->display_info.height_mm = mode->height_mm;
++	connector->display_info.bpc = 8;
++
++	return 1;
++}
++
++static const struct drm_panel_funcs ld083wu1_funcs = {
++	.prepare = ld083wu1_prepare,
++	.disable = ld083wu1_disable,
++	.get_modes = ld083wu1_get_modes,
++};
++
++static int ld083wu1_probe(struct mipi_dsi_device *dsi)
++{
++	struct drm_panel *panel;
++	int ret;
++
++	panel = devm_kzalloc(&dsi->dev, sizeof(*panel), GFP_KERNEL);
++	if (!panel)
++		return -ENOMEM;
++
++	dsi->lanes = 4;
++	dsi->format = MIPI_DSI_FMT_RGB888;
++	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_LPM |
++			  MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_NO_EOT_PACKET;
++
++	drm_panel_init(panel, &dsi->dev, &ld083wu1_funcs, DRM_MODE_CONNECTOR_DSI);
++	mipi_dsi_set_drvdata(dsi, panel);
++	drm_panel_add(panel);
++
++	ret = mipi_dsi_attach(dsi);
++	if (ret)
++		drm_panel_remove(panel);
++
++	return ret;
++}
++
++static void ld083wu1_remove(struct mipi_dsi_device *dsi)
++{
++	mipi_dsi_detach(dsi);
++	drm_panel_remove(mipi_dsi_get_drvdata(dsi));
++}
++
++static const struct of_device_id ld083wu1_of_match[] = {
++	{ .compatible = "lg,ld083wu1" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ld083wu1_of_match);
++
++static struct mipi_dsi_driver ld083wu1_driver = {
++	.probe = ld083wu1_probe,
++	.remove = ld083wu1_remove,
++	.driver = {
++		.name = "panel-lg-ld083wu1",
++		.of_match_table = ld083wu1_of_match,
++	},
++};
++module_mipi_dsi_driver(ld083wu1_driver);
++
++MODULE_DESCRIPTION("LG Display LD083WU1 MIPI DSI panel");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/iommu/msm_iommu.c b/drivers/iommu/msm_iommu.c
+index 16179a9a7..b091edfc0 100644
+--- a/drivers/iommu/msm_iommu.c
++++ b/drivers/iommu/msm_iommu.c
+@@ -42,7 +42,6 @@ struct msm_priv {
+ 	struct iommu_domain domain;
+ 	struct io_pgtable_cfg	cfg;
+ 	struct io_pgtable_ops	*iop;
+-	struct device		*dev;
+ 	spinlock_t		pgtlock; /* pagetable lock */
+ };
+ 
+@@ -142,7 +141,6 @@ static void __flush_iotlb_range(unsigned long iova, size_t size,
+ 	struct msm_iommu_dev *iommu = NULL;
+ 	struct msm_iommu_ctx_dev *master;
+ 	int ret = 0;
+-	int temp_size;
+ 
+ 	list_for_each_entry(iommu, &priv->list_attached, dom_node) {
+ 		ret = __enable_clocks(iommu);
+@@ -150,14 +148,12 @@ static void __flush_iotlb_range(unsigned long iova, size_t size,
+ 			goto fail;
+ 
+ 		list_for_each_entry(master, &iommu->ctx_list, list) {
+-			temp_size = size;
+-			do {
+-				iova &= TLBIVA_VA;
+-				iova |= GET_CONTEXTIDR_ASID(iommu->base,
+-							    master->num);
+-				SET_TLBIVA(iommu->base, master->num, iova);
+-				iova += granule;
+-			} while (temp_size -= granule);
++			u32 asid = GET_CONTEXTIDR_ASID(iommu->base, master->num);
++			size_t offset;
++
++			for (offset = 0; offset < size; offset += granule)
++				SET_TLBIVA(iommu->base, master->num,
++					   ((iova + offset) & TLBIVA_VA) | asid);
+ 		}
+ 
+ 		__disable_clocks(iommu);
+@@ -337,7 +333,8 @@ static void msm_iommu_domain_free(struct iommu_domain *domain)
+ 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
+ }
+ 
+-static int msm_iommu_domain_config(struct msm_priv *priv)
++static int msm_iommu_domain_config(struct msm_priv *priv,
++				   struct msm_iommu_dev *iommu)
+ {
+ 	spin_lock_init(&priv->pgtlock);
+ 
+@@ -346,12 +343,12 @@ static int msm_iommu_domain_config(struct msm_priv *priv)
+ 		.ias = 32,
+ 		.oas = 32,
+ 		.tlb = &msm_iommu_flush_ops,
+-		.iommu_dev = priv->dev,
++		.iommu_dev = iommu->dev,
+ 	};
+ 
+ 	priv->iop = alloc_io_pgtable_ops(ARM_V7S, &priv->cfg, priv);
+ 	if (!priv->iop) {
+-		dev_err(priv->dev, "Failed to allocate pgtable\n");
++		dev_err(iommu->dev, "Failed to allocate pgtable\n");
+ 		return -EINVAL;
+ 	}
+ 
+@@ -367,10 +364,10 @@ static struct msm_iommu_dev *find_iommu_for_dev(struct device *dev)
+ 	struct msm_iommu_ctx_dev *master;
+ 
+ 	list_for_each_entry(iommu, &qcom_iommu_devices, dev_node) {
+-		master = list_first_entry(&iommu->ctx_list,
+-					  struct msm_iommu_ctx_dev,
+-					  list);
+-		if (master->of_node == dev->of_node) {
++		master = list_first_entry_or_null(&iommu->ctx_list,
++						  struct msm_iommu_ctx_dev,
++						  list);
++		if (master && master->of_node == dev->of_node) {
+ 			ret = iommu;
+ 			break;
+ 		}
+@@ -402,15 +399,22 @@ static int msm_iommu_attach_dev(struct iommu_domain *domain, struct device *dev)
+ 	struct msm_priv *priv = to_msm_priv(domain);
+ 	struct msm_iommu_ctx_dev *master;
+ 
+-	priv->dev = dev;
+-	msm_iommu_domain_config(priv);
++	spin_lock_irqsave(&msm_iommu_lock, flags);
++	iommu = find_iommu_for_dev(dev);
++	spin_unlock_irqrestore(&msm_iommu_lock, flags);
++	if (!iommu)
++		return -ENODEV;
++
++	ret = msm_iommu_domain_config(priv, iommu);
++	if (ret)
++		return ret;
+ 
+ 	spin_lock_irqsave(&msm_iommu_lock, flags);
+ 	list_for_each_entry(iommu, &qcom_iommu_devices, dev_node) {
+-		master = list_first_entry(&iommu->ctx_list,
+-					  struct msm_iommu_ctx_dev,
+-					  list);
+-		if (master->of_node == dev->of_node) {
++		master = list_first_entry_or_null(&iommu->ctx_list,
++						  struct msm_iommu_ctx_dev,
++						  list);
++		if (master && master->of_node == dev->of_node) {
+ 			ret = __enable_clocks(iommu);
+ 			if (ret)
+ 				goto fail;
+@@ -579,24 +583,51 @@ static void print_ctx_regs(void __iomem *base, int ctx)
+ 	       GET_SCTLR(base, ctx), GET_ACTLR(base, ctx));
+ }
+ 
++/*
++ * ->of_xlate() is replayed from scratch every time the client device's probe
++ * is retried, so the stream IDs gathered by the previous attempt have to be
++ * dropped before the new set is collected. dev_iommu_priv lives in dev->iommu,
++ * which the IOMMU core frees whenever an attempt fails, so a NULL value marks
++ * the first ->of_xlate() call of a pass. The device itself is stored as the
++ * marker, its value is never used.
++ */
++static void start_of_xlate_pass(struct device *dev)
++{
++	struct msm_iommu_dev *iommu;
++	struct msm_iommu_ctx_dev *master;
++
++	if (dev_iommu_priv_get(dev))
++		return;
++
++	list_for_each_entry(iommu, &qcom_iommu_devices, dev_node)
++		list_for_each_entry(master, &iommu->ctx_list, list)
++			if (master->of_node == dev->of_node)
++				master->num_mids = 0;
++
++	dev_iommu_priv_set(dev, dev);
++}
++
+ static int insert_iommu_master(struct device *dev,
+ 				struct msm_iommu_dev **iommu,
+ 				struct of_phandle_args *spec)
+ {
+-	struct msm_iommu_ctx_dev *master = dev_iommu_priv_get(dev);
++	struct msm_iommu_ctx_dev *master;
+ 	int sid;
+ 
+-	if (list_empty(&(*iommu)->ctx_list)) {
+-		master = kzalloc(sizeof(*master), GFP_ATOMIC);
+-		if (!master) {
+-			dev_err(dev, "Failed to allocate iommu_master\n");
+-			return -ENOMEM;
+-		}
+-		master->of_node = dev->of_node;
+-		list_add(&master->list, &(*iommu)->ctx_list);
+-		dev_iommu_priv_set(dev, master);
++	/* A master describes one device on one IOMMU instance. */
++	list_for_each_entry(master, &(*iommu)->ctx_list, list)
++		if (master->of_node == dev->of_node)
++			goto add_sid;
++
++	master = kzalloc(sizeof(*master), GFP_ATOMIC);
++	if (!master) {
++		dev_err(dev, "Failed to allocate iommu_master\n");
++		return -ENOMEM;
+ 	}
++	master->of_node = dev->of_node;
++	list_add(&master->list, &(*iommu)->ctx_list);
+ 
++add_sid:
+ 	for (sid = 0; sid < master->num_mids; sid++)
+ 		if (master->mids[sid] == spec->args[0]) {
+ 			dev_warn(dev, "Stream ID 0x%x repeated; ignoring\n",
+@@ -604,6 +635,9 @@ static int insert_iommu_master(struct device *dev,
+ 			return 0;
+ 		}
+ 
++	if (master->num_mids >= ARRAY_SIZE(master->mids))
++		return -ENOSPC;
++
+ 	master->mids[master->num_mids++] = spec->args[0];
+ 	return 0;
+ }
+@@ -628,6 +662,8 @@ static int qcom_iommu_of_xlate(struct device *dev,
+ 		goto fail;
+ 	}
+ 
++	start_of_xlate_pass(dev);
++
+ 	ret = insert_iommu_master(dev, &iommu, spec);
+ fail:
+ 	spin_unlock_irqrestore(&msm_iommu_lock, flags);
+diff --git a/drivers/phy/qualcomm/phy-qcom-usb-hs.c b/drivers/phy/qualcomm/phy-qcom-usb-hs.c
+index 53e46c220..3c9912030 100644
+--- a/drivers/phy/qualcomm/phy-qcom-usb-hs.c
++++ b/drivers/phy/qualcomm/phy-qcom-usb-hs.c
+@@ -12,6 +12,7 @@
+ #include <linux/reset.h>
+ #include <linux/extcon.h>
+ #include <linux/notifier.h>
++#include <linux/delay.h>
+ 
+ #define ULPI_PWR_CLK_MNG_REG		0x88
+ # define ULPI_PWR_OTG_COMP_DISABLE	BIT(0)
+@@ -110,6 +111,8 @@ static int qcom_usb_hs_phy_power_on(struct phy *phy)
+ 	struct qcom_usb_hs_phy *uphy = phy_get_drvdata(phy);
+ 	struct ulpi *ulpi = uphy->ulpi;
+ 	const struct ulpi_seq *seq;
++	bool apq8064 = of_device_is_compatible(ulpi->dev.of_node,
++					       "qcom,usb-hs-phy-apq8064");
+ 	int ret, state;
+ 
+ 	ret = clk_prepare_enable(uphy->ref_clk);
+@@ -128,8 +131,8 @@ static int qcom_usb_hs_phy_power_on(struct phy *phy)
+ 	if (ret)
+ 		goto err_1p8;
+ 
+-	ret = regulator_set_voltage_triplet(uphy->v3p3, 3050000, 3300000,
+-					    3300000);
++	ret = regulator_set_voltage_triplet(uphy->v3p3, 3050000,
++					    apq8064 ? 3075000 : 3300000, 3300000);
+ 	if (ret)
+ 		goto err_3p3;
+ 
+@@ -141,14 +144,22 @@ static int qcom_usb_hs_phy_power_on(struct phy *phy)
+ 	if (ret)
+ 		goto err_3p3;
+ 
+-	for (seq = uphy->init_seq; seq->addr; seq++) {
++	/* Keep the APQ8064 analog overrides on the far side of POR. */
++	if (apq8064 && uphy->reset) {
++		ret = reset_control_reset(uphy->reset);
++		if (ret)
++			goto err_ulpi;
++		msleep(100);
++	}
++
++	for (seq = uphy->init_seq; seq->addr || seq->val; seq++) {
+ 		ret = ulpi_write(ulpi, ULPI_EXT_VENDOR_SPECIFIC + seq->addr,
+ 				 seq->val);
+ 		if (ret)
+ 			goto err_ulpi;
+ 	}
+ 
+-	if (uphy->reset) {
++	if (!apq8064 && uphy->reset) {
+ 		ret = reset_control_reset(uphy->reset);
+ 		if (ret)
+ 			goto err_ulpi;
+diff --git a/drivers/usb/chipidea/ci_hdrc_msm.c b/drivers/usb/chipidea/ci_hdrc_msm.c
+index 46105457e..95058b352 100644
+--- a/drivers/usb/chipidea/ci_hdrc_msm.c
++++ b/drivers/usb/chipidea/ci_hdrc_msm.c
+@@ -12,6 +12,7 @@
+ #include <linux/io.h>
+ #include <linux/reset-controller.h>
+ #include <linux/extcon.h>
++#include <linux/regulator/consumer.h>
+ #include <linux/of.h>
+ 
+ #include "ci.h"
+@@ -192,6 +193,10 @@ static int ci_hdrc_msm_probe(struct platform_device *pdev)
+ 			  CI_HDRC_OVERRIDE_PHY_CONTROL;
+ 	ci->pdata.notify_event = ci_hdrc_msm_notify_event;
+ 
++	ret = devm_regulator_get_enable_optional(&pdev->dev, "vddcx");
++	if (ret && ret != -ENODEV)
++		return dev_err_probe(&pdev->dev, ret, "Failed to enable VDDCX\n");
++
+ 	reset = devm_reset_control_get(&pdev->dev, "core");
+ 	if (IS_ERR(reset))
+ 		return PTR_ERR(reset);
+diff --git a/drivers/usb/chipidea/core.c b/drivers/usb/chipidea/core.c
+index 460a71f20..cea239137 100644
+--- a/drivers/usb/chipidea/core.c
++++ b/drivers/usb/chipidea/core.c
+@@ -403,12 +403,15 @@ static int ci_usb_phy_init(struct ci_hdrc *ci)
+ void ci_platform_configure(struct ci_hdrc *ci)
+ {
+ 	bool is_device_mode, is_host_mode;
++	int ret;
+ 
+ 	is_device_mode = hw_read(ci, OP_USBMODE, USBMODE_CM) == USBMODE_CM_DC;
+ 	is_host_mode = hw_read(ci, OP_USBMODE, USBMODE_CM) == USBMODE_CM_HC;
+ 
+ 	if (is_device_mode) {
+-		phy_set_mode(ci->phy, PHY_MODE_USB_DEVICE);
++		ret = phy_set_mode(ci->phy, PHY_MODE_USB_DEVICE);
++		if (ret)
++			dev_err(ci->dev, "Failed to set USB PHY device mode: %d\n", ret);
+ 
+ 		if (ci->platdata->flags & CI_HDRC_DISABLE_DEVICE_STREAMING)
+ 			hw_write(ci, OP_USBMODE, USBMODE_CI_SDIS,
+diff --git a/drivers/usb/chipidea/udc.c b/drivers/usb/chipidea/udc.c
+index e7a02d9e1..2c4be2e31 100644
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -1681,8 +1681,12 @@ static void ci_hdrc_gadget_connect(struct usb_gadget *_gadget, int is_active)
+ 	struct ci_hdrc *ci = container_of(_gadget, struct ci_hdrc, gadget);
+ 
+ 	if (is_active) {
++		int ret;
++
+ 		pm_runtime_get_sync(ci->dev);
+-		hw_device_reset(ci);
++		ret = hw_device_reset(ci);
++		if (ret)
++			dev_err(ci->dev, "Gadget reset failed: %d\n", ret);
+ 		spin_lock_irq(&ci->lock);
+ 		if (ci->driver) {
+ 			hw_device_state(ci, ci->ep0out->qh.dma);
+diff --git a/drivers/usb/gadget/legacy/serial.c b/drivers/usb/gadget/legacy/serial.c
+index dcd3a6603..1c9815516 100644
+--- a/drivers/usb/gadget/legacy/serial.c
++++ b/drivers/usb/gadget/legacy/serial.c
+@@ -12,6 +12,7 @@
+ #include <linux/module.h>
+ #include <linux/tty.h>
+ #include <linux/tty_flip.h>
++#include <linux/usb/cdc.h>
+ 
+ #include "u_serial.h"
+ 
+@@ -292,6 +293,8 @@ static int __init gserial_init(void)
+ 		serial_config_driver.label = "CDC ACM config";
+ 		serial_config_driver.bConfigurationValue = 2;
+ 		device_desc.bDeviceClass = USB_CLASS_COMM;
++		/* Match the inbox Windows usbser driver for this ACM gadget. */
++		device_desc.bDeviceSubClass = USB_CDC_SUBCLASS_ACM;
+ 		device_desc.idProduct =
+ 				cpu_to_le16(GS_CDC_PRODUCT_ID);
+ 	} else if (use_obex) {

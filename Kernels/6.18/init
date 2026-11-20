@@ -1,0 +1,146 @@
+#!/bin/sh
+set -u
+
+PATH=/bin
+export PATH
+
+busybox mount -t devtmpfs devtmpfs /dev
+busybox mount -t proc proc /proc
+busybox mount -t sysfs sysfs /sys
+busybox mount -t debugfs debugfs /sys/kernel/debug
+busybox mount -t tracefs tracefs /sys/kernel/tracing
+busybox mount -t pstore pstore /sys/fs/pstore
+busybox --install -s /bin
+
+log() {
+    printf '<6>v500-init: %s\n' "$*" > /dev/kmsg
+}
+
+log "Test userspace started"
+if [ -x /bin/test-atomic-add ]; then
+    /bin/test-atomic-add || log "ARM atomic add self-test failed"
+fi
+monitor_usb() {
+    previous=
+    while :; do
+        for udc in /sys/class/udc/*; do
+            [ -r "$udc/state" ] || continue
+            state=$(cat "$udc/state")
+            speed=$(cat "$udc/current_speed")
+            status="$state, speed=$speed"
+            if [ "$status" != "$previous" ]; then
+                log "USB ${udc##*/}: $status"
+                previous=$status
+            fi
+        done
+        sleep 1
+    done
+}
+
+probe_emmc() {
+    attempts=0
+    while [ ! -b /dev/mmcblk0 ] && [ "$attempts" -lt 20 ]; do
+        if ! sleep 1; then
+            log "eMMC wait failed at attempt $((attempts + 1))"
+            return
+        fi
+        attempts=$((attempts + 1))
+    done
+    if [ ! -b /dev/mmcblk0 ]; then
+        log "eMMC /dev/mmcblk0 did not appear within 20 seconds"
+        return
+    fi
+    if ! blockdev --setro /dev/mmcblk0 || [ "$(blockdev --getro /dev/mmcblk0)" != 1 ]; then
+        log "eMMC detected but read-only mode could not be verified"
+        return
+    fi
+
+    sample=/tmp/v500-emmc-gpt.bin
+    if ! read_result=$(dd if=/dev/mmcblk0 of="$sample" bs=4096 count=16 2>&1); then
+        log "eMMC read failed: $read_result"
+    elif [ "$(stat -c %s "$sample")" != 65536 ]; then
+        log "eMMC returned a short read"
+    elif digest=$(sha256sum "$sample"); then
+        log "eMMC read-only=1; first 65536 bytes SHA-256 ${digest%% *}"
+    else
+        log "eMMC sample could not be hashed"
+    fi
+    rm -f "$sample"
+}
+
+case " $(cat /proc/cmdline) " in
+    *" v500_trace=1 "*)
+        probe_emmc
+        for part in 7 23 24 27 36; do
+            uevent="/sys/class/block/mmcblk0p$part/uevent"
+            if [ -r "$uevent" ]; then
+                while IFS= read -r field; do
+                    case "$field" in
+                        PARTNAME=*) log "eMMC GPT partition $part: ${field#PARTNAME=}" ;;
+                    esac
+                done < "$uevent"
+            fi
+        done
+        if [ -r /sys/kernel/debug/devices_deferred ]; then
+            while IFS= read -r device; do
+                log "Deferred device: $device"
+            done < /sys/kernel/debug/devices_deferred
+        fi
+        if [ -c /dev/ttyGS0 ]; then
+            log "USB serial gadget created ttyGS0"
+        else
+            log "USB serial gadget has no ttyGS0"
+        fi
+        for state_file in /sys/class/udc/*/state; do
+            if [ -r "$state_file" ]; then
+                IFS= read -r state < "$state_file"
+                log "USB controller state: $state"
+            fi
+        done
+        log "Requesting reboot to recovery after offline checks"
+        result=$(/bin/reboot-recovery 2>&1)
+        log "Recovery helper exited with status $?: $result"
+        ;;
+    *" v500_usb_console=1 "*)
+        monitor_usb &
+        probe_emmc
+        ;;
+    *)
+        probe_emmc &
+        ;;
+esac
+
+cat > /etc/profile <<'EOF'
+export PS1='v500# '
+printf '\nLG V500 Linux 6.18 test console\n'
+printf 'v500_status | dmesg | ls /sys/fs/pstore | reboot-recovery\n\n'
+v500_status() {
+    uname -a
+    cat /proc/cmdline /proc/partitions
+    printf 'Boot ID: '
+    cat /proc/sys/kernel/random/boot_id
+    printf 'Online CPUs: '
+    cat /sys/devices/system/cpu/online
+    grep -E '^(MemTotal|MemAvailable|HighTotal|HighFree):' /proc/meminfo
+    for udc in /sys/class/udc/*; do
+        [ -r "$udc/state" ] || continue
+        printf 'USB %s: ' "${udc##*/}"
+        cat "$udc/state" "$udc/current_speed"
+    done
+    if [ -r /sys/block/mmcblk0/ro ]; then
+        printf 'eMMC read-only: '
+        cat /sys/block/mmcblk0/ro
+    fi
+}
+EOF
+
+while [ ! -c /dev/ttyGS0 ]; do
+    sleep 1
+done
+log "USB serial gadget is ready on ttyGS0"
+
+export ENV=/etc/profile
+while :; do
+    getty -L -n -l /bin/sh 115200 ttyGS0 vt100
+    sleep 1
+done

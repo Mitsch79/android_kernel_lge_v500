@@ -1,0 +1,29 @@
+diff --git a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+index 6eab560b3..b3781b485 100644
+--- a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+@@ -517,6 +517,16 @@ static u32 a3xx_get_rptr(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
+ 	return ring->memptrs->rptr;
+ }
+ 
++static u64 a3xx_gpu_busy(struct msm_gpu *gpu, unsigned long *out_sample_rate)
++{
++	u64 busy_cycles;
++
++	busy_cycles = gpu_read64(gpu, REG_A3XX_RBBM_PERFCTR_RBBM_1_LO);
++	*out_sample_rate = clk_get_rate(gpu->core_clk);
++
++	return busy_cycles;
++}
++
+ static const struct adreno_gpu_funcs funcs = {
+ 	.base = {
+ 		.get_param = adreno_get_param,
+@@ -536,6 +546,7 @@ static const struct adreno_gpu_funcs funcs = {
+ 		.gpu_state_put = adreno_gpu_state_put,
+ 		.create_address_space = adreno_iommu_create_address_space,
+ 		.get_rptr = a3xx_get_rptr,
++		.gpu_busy = a3xx_gpu_busy,
+ 	},
+ };
+ 
