@@ -4,6 +4,8 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 ## Building a test boot image
 
+The LD083WU1 panel controls its LM3532 illumination through the Linux backlight class at `/sys/class/backlight/panel-backlight`. DRM blanks the light when disabling the display and restores its selected brightness when enabling it.
+
 Build Android's system, vendor and ramdisk images first. Set the following environment variables from the Android 21 source root.
 
 ```sh

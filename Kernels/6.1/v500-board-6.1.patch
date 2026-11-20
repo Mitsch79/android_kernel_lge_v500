@@ -36,7 +36,20 @@
  
 --- a/qcom-apq8064-lg-v500-display.dts
 +++ b/qcom-apq8064-lg-v500-display.dts
-@@ -17,7 +17,12 @@
+@@ -5,6 +5,12 @@
+ #include <dt-bindings/reset/qcom,mmcc-msm8960.h>
+ 
+ / {
++	panel_backlight: panel-backlight {
++		compatible = "led-backlight";
++		leds = <&panel_led>;
++		default-brightness-level = <180>;
++	};
++
+ 	v500_lcd_vdd: regulator-lcd-vdd {
+ 		compatible = "regulator-fixed";
+ 		regulator-name = "lcd-vdd";
+@@ -17,7 +23,12 @@
  	};
  };
  
@@ -50,7 +63,16 @@
  	regulators {
  		vdd_l1_l2_l12_l18-supply = <&v500_s4>;
  		vin_lvs1_3_6-supply = <&v500_s4>;
-@@ -93,14 +98,14 @@
+@@ -59,7 +70,7 @@
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+ 
+-		led@0 {
++		panel_led: led@0 {
+ 			reg = <0>;
+ 			led-sources = <0 1 2>;
+ 			ti,led-mode = <0>;
+@@ -93,14 +104,14 @@
  	resets = <&mmcc MDP_RESET>;
  	clocks = <&mmcc MDP_CLK>, <&mmcc MDP_AHB_CLK>, <&mmcc MDP_AXI_CLK>,
  		 <&mmcc MDP_LUT_CLK>, <&mmcc HDMI_TV_CLK>, <&mmcc MDP_TV_CLK>,
@@ -68,6 +90,14 @@
  };
  
  &gpu_opp_table {
+@@ -140,6 +151,7 @@
+ 
+ 	panel@0 {
+ 		compatible = "lg,ld083wu1";
++		backlight = <&panel_backlight>;
+ 		reg = <0>;
+ 
+ 		port {
 --- a/qcom-apq8064.dtsi
 +++ b/qcom-apq8064.dtsi
 @@ -1179,7 +1179,7 @@

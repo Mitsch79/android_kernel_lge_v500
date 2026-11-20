@@ -24,7 +24,7 @@ if [[ ! -e $source_dir ]]; then
 fi
 [[ $(git -C "$source_dir" rev-parse HEAD) == "$revision" ]]
 changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-add
-         v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume)
+         v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
@@ -114,7 +114,8 @@ fi
 for symbol in ARCH_QCOM ARCH_MSM8960 CLKSRC_QCOM ARM_APPENDED_DTB ARM_ATAG_DTB_COMPAT HIGHMEM SMP MMC_ARMMMCI \
               ANDROID_BINDER_IPC ANDROID_BINDERFS ASHMEM EXT4_FS USB_CHIPIDEA_MSM EXTCON_PM8921_USB PSTORE_RAM \
               TOUCHSCREEN_ATMEL_MXT LEDS_LM3532 DRM_MSM_MDP4 DRM_MSM_DSI_28NM_8960_PHY DRM_PANEL_LG_LD083WU1 \
-              MSM_IOMMU DRM_VGEM BPF_JIT CPUSETS USB_CONFIGFS_F_FS DMABUF_HEAPS_SYSTEM; do
+              BACKLIGHT_LED MSM_IOMMU DRM_VGEM BPF_JIT CPUSETS USB_CONFIGFS_F_FS USB_CONFIGFS_UEVENT \
+              USB_CONFIGFS_F_ACC DMABUF_HEAPS_SYSTEM; do
     grep -Fx "CONFIG_$symbol=y" "$build_dir/.config" || { echo "Missing $symbol" >&2; exit 1; }
 done
 "${build[@]}" -j"${V500_JOBS:-12}" zImage

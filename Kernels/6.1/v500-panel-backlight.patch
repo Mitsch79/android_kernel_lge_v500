@@ -1,0 +1,13 @@
+diff --git a/drivers/gpu/drm/panel/panel-lg-ld083wu1.c b/drivers/gpu/drm/panel/panel-lg-ld083wu1.c
+--- a/drivers/gpu/drm/panel/panel-lg-ld083wu1.c
++++ b/drivers/gpu/drm/panel/panel-lg-ld083wu1.c
+@@ -119,6 +119,9 @@ static int ld083wu1_probe(struct mipi_dsi_device *dsi)
+ 
+ 	drm_panel_init(panel, &dsi->dev, &ld083wu1_funcs, DRM_MODE_CONNECTOR_DSI);
+ 	panel->prepare_prev_first = true;
++	ret = drm_panel_of_backlight(panel);
++	if (ret)
++		return ret;
+ 	mipi_dsi_set_drvdata(dsi, panel);
+ 	drm_panel_add(panel);
+ 
