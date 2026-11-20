@@ -24,7 +24,8 @@ if [[ ! -e $source_dir ]]; then
 fi
 [[ $(git -C "$source_dir" rev-parse HEAD) == "$revision" ]]
 changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-add
-         v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight)
+         v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight
+         v500-a320-vbif-timeout)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
