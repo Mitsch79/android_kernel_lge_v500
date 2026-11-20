@@ -4,6 +4,8 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 ## Building a test boot image
 
+The Android test configuration enables high-resolution timers on the Qualcomm one-shot clock event device. The kernel tick rate remains 100 Hz.
+
 The LD083WU1 panel controls its LM3532 illumination through the Linux backlight class at `/sys/class/backlight/panel-backlight`. DRM blanks the light when disabling the display and restores its selected brightness when enabling it.
 
 During GPU runtime suspend, the V500 Adreno 320 driver waits up to 100 ms for all six VBIF clients to acknowledge the halt request. If any acknowledgment is missing, it releases the request and returns busy. This bounds the time a newly submitted frame can spend behind this particular poll.

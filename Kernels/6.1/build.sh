@@ -105,6 +105,8 @@ if [[ ${V500_TEST_ATOMIC_ADD:-0} == 1 ]]; then
     atomic_module="$build_dir/lib/test_bpf.ko"
 fi
 if [[ $probe == lineage21 ]]; then
+    # Android's frame scheduler and the GPU driver's sleepable waits need sub-tick timers.
+    printf 'CONFIG_HIGH_RES_TIMERS=y\n' >> "$config"
     sed -i '/^CONFIG_USB_G_SERIAL=/d' "$config"
     fw="$build_dir/firmware"
     install -d "$fw/qcom"
@@ -112,6 +114,7 @@ if [[ $probe == lineage21 ]]; then
     printf 'CONFIG_EXTRA_FIRMWARE="qcom/a300_pm4.fw qcom/a300_pfp.fw"\nCONFIG_EXTRA_FIRMWARE_DIR="%s"\n' "$fw" >> "$config"
 fi
 "${build[@]}" KCONFIG_ALLCONFIG="$config" allnoconfig
+if [[ $probe == lineage21 ]]; then grep -Fx 'CONFIG_HIGH_RES_TIMERS=y' "$build_dir/.config"; fi
 for symbol in ARCH_QCOM ARCH_MSM8960 CLKSRC_QCOM ARM_APPENDED_DTB ARM_ATAG_DTB_COMPAT HIGHMEM SMP MMC_ARMMMCI \
               ANDROID_BINDER_IPC ANDROID_BINDERFS ASHMEM EXT4_FS USB_CHIPIDEA_MSM EXTCON_PM8921_USB PSTORE_RAM \
               TOUCHSCREEN_ATMEL_MXT LEDS_LM3532 DRM_MSM_MDP4 DRM_MSM_DSI_28NM_8960_PHY DRM_PANEL_LG_LD083WU1 \
