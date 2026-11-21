@@ -6,7 +6,9 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 The Android test configuration enables high-resolution timers on the Qualcomm one-shot clock event device. The kernel tick rate remains 100 Hz.
 
-`V500_M6_VBIF_CANCEL_IDLE=1` builds an experimental V500 Adreno driver in a separate worktree. An incoming runtime power reference can interrupt the wait for bus clients during autosuspend. The driver still requires all six acknowledgements before powering down. The Android test kernel currently lacks battery-temperature telemetry. Unattended device qualification is pending.
+`V500_M6_VBIF_CANCEL_IDLE=1` builds an experimental V500 Adreno driver in a separate worktree. An incoming runtime power reference can interrupt the wait for bus clients during autosuspend. The driver still requires all six acknowledgements before powering down.
+
+The PM8921 driver reports cell voltage, battery temperature and net cell current. Android builds enable budgeted USB charging by default. Set `V500_USB_CHARGING=0` when building the passive GUI test profile. The standard USB budget is capped at 500 mA. The higher CDP budget requires an explicit test build. Sustained net charging at 1.5 A with the display on remains unverified.
 
 The LD083WU1 panel controls its LM3532 illumination through the Linux backlight class at `/sys/class/backlight/panel-backlight`. DRM blanks the light when disabling the display and restores its selected brightness when enabling it.
 
