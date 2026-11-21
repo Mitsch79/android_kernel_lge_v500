@@ -1,0 +1,37 @@
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -1680,7 +1680,7 @@
+ static void ci_v500_check_source(struct ci_hdrc *ci)
+ {
+ 	u32 generation;
+-	bool dedicated;
++	enum power_supply_usb_type source;
+ 
+ 	if (!of_property_read_bool(ci->dev->parent->of_node, "lge,v500-detect-charger"))
+ 		return;
+@@ -1693,12 +1693,13 @@
+ 	generation = ci->v500_attach_generation;
+ 	spin_unlock_irq(&ci->lock);
+ 
+-	dedicated = v500_detect_dcp(ci);
++	source = v500_detect_source(ci);
+ 	spin_lock_irq(&ci->lock);
+ 	if (ci->vbus_active && ci->v500_attach_generation == generation) {
+-		v500_usb_set_dedicated(dedicated);
++		v500_usb_set_source(source);
+ 		dev_info(ci->dev, "V500 USB source: %s\n",
+-			 dedicated ? "BC1.2 DCP" : "use gadget budget");
++			 source == POWER_SUPPLY_USB_TYPE_DCP ? "BC1.2 DCP" :
++			 source == POWER_SUPPLY_USB_TYPE_CDP ? "BC1.2 CDP" : "use gadget budget");
+ 	}
+ 	spin_unlock_irq(&ci->lock);
+ }
+@@ -1753,7 +1754,7 @@
+ 	if (!is_active && of_property_read_bool(ci->dev->parent->of_node, "lge,v500-usb-budget")) {
+ 		ci->v500_attach_generation++;
+ 		ci->v500_source_checked = false;
+-		v500_usb_set_dedicated(false);
++		v500_usb_set_source(POWER_SUPPLY_USB_TYPE_UNKNOWN);
+ 		v500_usb_set_budget(0);
+ 	}
+ 	spin_unlock_irqrestore(&ci->lock, flags);

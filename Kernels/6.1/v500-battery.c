@@ -57,6 +57,8 @@ struct v500_battery {
 	unsigned long stamp;
 	int irq[IRQ_COUNT], gain_codes, ref_low, ref_high, error;
 	int saved_percent, initial_offset_uah, ocv_base_uah;
+	int usb_trim_base, programmed_ma;
+	bool usb_trim_table1;
 	u16 last_ocv;
 	bool active, stopped, voltage_fault;
 };
@@ -67,19 +69,19 @@ struct v500_battery {
 static DEFINE_SPINLOCK(budget_lock);
 static struct v500_battery *controller;
 static unsigned int budget_ma;
-static bool dedicated_port;
+static enum power_supply_usb_type detected_source;
 
-void v500_usb_set_dedicated(bool present)
+void v500_usb_set_source(enum power_supply_usb_type source)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&budget_lock, flags);
-	WRITE_ONCE(dedicated_port, present);
+	WRITE_ONCE(detected_source, source);
 	if (controller && !controller->stopped)
 		mod_delayed_work(system_wq, &controller->work, 0);
 	spin_unlock_irqrestore(&budget_lock, flags);
 }
-EXPORT_SYMBOL_GPL(v500_usb_set_dedicated);
+EXPORT_SYMBOL_GPL(v500_usb_set_source);
 
 int v500_usb_set_budget(unsigned int ma)
 {
@@ -108,7 +110,73 @@ static int checked_bits(struct regmap *map, unsigned int reg, u8 mask, u8 value)
 
 static int inhibit(struct v500_battery *b)
 {
+	b->programmed_ma = 0;
 	return checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND, USB_SUSPEND);
+}
+
+/* LG reads the factory calibration and selects one of two PM8921 trim
+ * tables. The coarse current limit alone does not apply that calibration.
+ */
+static int read_usb_trim(struct v500_battery *b)
+{
+	unsigned int hi, lo, page, select;
+	int ret, restore;
+
+	ret = regmap_read(b->map, 0x09c, &hi);
+	if (!ret)
+		ret = regmap_read(b->map, 0x10a, &lo);
+	if (!ret)
+		ret = regmap_read(b->map, 0x04f, &page);
+	if (ret)
+		return ret;
+	ret = regmap_write(b->map, 0x04f, 0x5e);
+	if (!ret)
+		ret = regmap_read(b->map, 0x339, &select);
+	restore = regmap_write(b->map, 0x04f, page);
+	if (ret || restore)
+		return ret ?: restore;
+	b->usb_trim_base = (hi >> 5) << 3 | (lo >> 5);
+	b->usb_trim_table1 = select & BIT(6);
+	return 0;
+}
+
+static const struct v500_usb_step {
+	int ma;
+	u8 coarse, trim1, trim2;
+} usb_steps[] = {
+	{ 100, 0, 0, 0 }, { 500, 1, 5, 2 }, { 900, 4, 10, 5 },
+	{ 1300, 6, 15, 6 }, { 1500, 7, 16, 6 },
+};
+
+static int set_input_limit(struct v500_battery *b, int ma)
+{
+	const struct v500_usb_step *step = &usb_steps[0];
+	unsigned int page;
+	int trim, ret, restore, i;
+
+	for (i = 1; i < ARRAY_SIZE(usb_steps) && ma >= usb_steps[i].ma; i++) {
+		step = &usb_steps[i];
+		/* Raise a CDP in steps over consecutive healthy samples. */
+		if (step->ma > b->programmed_ma)
+			break;
+	}
+	if (b->programmed_ma == step->ma)
+		return 0;
+	ret = checked_bits(b->map, USB_LIMIT_REG, USB_LIMIT_MASK, step->coarse << 2);
+	if (!ret)
+		ret = regmap_read(b->map, 0x04f, &page);
+	if (ret)
+		return ret;
+	trim = max(0, b->usb_trim_base - (b->usb_trim_table1 ? step->trim1 : step->trim2));
+	ret = regmap_write(b->map, 0x04f, page | 0x06);
+	if (!ret)
+		ret = checked_bits(b->map, 0x355, 0x3f, trim);
+	restore = regmap_write(b->map, 0x04f, page);
+	if (ret || restore)
+		return ret ?: restore;
+	b->programmed_ma = step->ma;
+	dev_info(b->dev, "USB input limit read back: %d mA\n", step->ma);
+	return 0;
 }
 
 static int start_pmic(struct v500_battery *b)
@@ -164,6 +232,8 @@ static int start_pmic(struct v500_battery *b)
 		ret = checked_bits(b->map, 0x007, BIT(6), BIT(6));
 	for (i = 0; !ret && i < ARRAY_SIZE(settings); i++)
 		ret = checked_bits(b->map, settings[i].reg, settings[i].mask, settings[i].value);
+	if (!ret)
+		ret = read_usb_trim(b);
 	return ret;
 }
 
@@ -344,16 +414,21 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 
 static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 {
-	/* First dedicated-port profile uses the validated PM8921 500 mA
-	 * input step. Device enumeration is only needed for a data port.
-	 */
-	bool dedicated = READ_ONCE(dedicated_port);
-	unsigned int ma = dedicated ? 500 : READ_ONCE(budget_ma);
+	enum power_supply_usb_type source = READ_ONCE(detected_source);
+	unsigned int ma = READ_ONCE(budget_ma);
 	int ret;
 
-	r->usb_type = !r->lines[USB] ? POWER_SUPPLY_USB_TYPE_UNKNOWN :
-		      dedicated ? POWER_SUPPLY_USB_TYPE_DCP :
-		      ma >= 100 ? POWER_SUPPLY_USB_TYPE_SDP : POWER_SUPPLY_USB_TYPE_UNKNOWN;
+	/* Keep DCP at its previously tested limit. For CDP require the
+	 * electrical signature and the configured gadget power request.
+	 * Honor zero/low-power requests on suspend or disconnect.
+	 */
+	if (source == POWER_SUPPLY_USB_TYPE_DCP)
+		ma = 500;
+	else if (source == POWER_SUPPLY_USB_TYPE_CDP && ma >= 500)
+		ma = 1500;
+	r->usb_type = r->lines[USB] ? source : POWER_SUPPLY_USB_TYPE_UNKNOWN;
+	if (r->lines[USB] && r->usb_type == POWER_SUPPLY_USB_TYPE_UNKNOWN && ma >= 100)
+		r->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
 	/* A load-dependent VBAT_OV can clear as soon as USB is suspended.
 	 * Do not retry a hardware overvoltage every polling interval.
 	 * Clear the interlock only after observing physical VBUS removal.
@@ -367,11 +442,11 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	if (!b->active || ma < 100 || !r->lines[USB] ||
 	    r->health != POWER_SUPPLY_HEALTH_GOOD || r->uv < 3200000)
 		return inhibit(b);
-	r->limit_ua = ma >= 500 ? 500000 : 100000;
-	ret = checked_bits(b->map, USB_LIMIT_REG, USB_LIMIT_MASK,
-			   r->limit_ua == 500000 ? BIT(2) : 0);
+	ret = set_input_limit(b, ma);
 	if (!ret)
 		ret = checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND, AUTO_CHARGE);
+	if (!ret)
+		r->limit_ua = b->programmed_ma * 1000;
 	return ret;
 }
 
@@ -381,7 +456,7 @@ static void sample_work(struct work_struct *work)
 	struct v500_reading r = {};
 	int ret;
 
-	if (!READ_ONCE(dedicated_port) && READ_ONCE(budget_ma) < 100)
+	if (READ_ONCE(detected_source) != POWER_SUPPLY_USB_TYPE_DCP && READ_ONCE(budget_ma) < 100)
 		inhibit(b);
 	ret = sample_pack(b, &r);
 	if (!ret)
@@ -421,6 +496,7 @@ static enum power_supply_property usb_props[] = {
 };
 static enum power_supply_usb_type usb_types[] = {
 	POWER_SUPPLY_USB_TYPE_UNKNOWN, POWER_SUPPLY_USB_TYPE_SDP, POWER_SUPPLY_USB_TYPE_DCP,
+	POWER_SUPPLY_USB_TYPE_CDP,
 };
 
 static int get_property(struct power_supply *psy, enum power_supply_property prop,
