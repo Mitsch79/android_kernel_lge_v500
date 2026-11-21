@@ -191,9 +191,9 @@ static int start_pmic(struct v500_battery *b)
 	};
 	static const struct { u16 reg; u8 mask, value; } settings[] = {
 		{ 0x212, 0x07, 0x02 }, /* enable HW temperature check, AWIFI thresholds */
-		/* AWIFI's pack is rated for 4.32 V. Its independent safety
-		 * comparator also sees a full battery carried over from 14.1.
-		 * Regulate below that limit at 4.20 V for these USB tests.
+		/* The 4.32 V value comes from the V30b device profile.
+		 * The FCC sample pack is labelled 4.3 V. Our test regulation
+		 * target is 4.20 V; this register is the independent VDD_SAFE.
 		 */
 		{ 0x221, 0x7f, (4320 - 3240) / 20 },
 		{ 0x220, 0xff, (4200 - 3240) / 20 }, /* regulation voltage */
