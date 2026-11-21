@@ -63,7 +63,8 @@ struct v500_battery {
 	int saved_percent, initial_offset_uah, ocv_base_uah;
 	int usb_trim_base, programmed_ma;
 	bool auto_charging;
-	bool test_sdp_edge, input_edge_seen, checking_input;
+	bool test_sdp_edge, test_cdp_edge, input_edge_seen, checking_input;
+	enum power_supply_usb_type step_source;
 	int batfet_irq;
 	unsigned long step_started;
 	int collapse_limit_ma;
@@ -493,13 +494,20 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
  * the open battery FET and the supply readings on the next samples.
  */
 static bool input_only_at_500(struct v500_battery *b, const struct v500_reading *r,
-			      unsigned int ma, int *fsm)
+			      enum power_supply_usb_type source, unsigned int ma, int *fsm)
 {
 	unsigned int ctrl;
 	bool fet_closed;
 
-	if (!b->test_sdp_edge || b->auto_charging || b->programmed_ma != 500 || ma != 500 ||
-	    r->usb_type != POWER_SUPPLY_USB_TYPE_SDP || r->health != POWER_SUPPLY_HEALTH_GOOD ||
+	if (source != b->step_source || r->usb_type != source)
+		return false;
+	if (source == POWER_SUPPLY_USB_TYPE_CDP) {
+		if (!b->test_cdp_edge || ma != 1500)
+			return false;
+	} else if (source != POWER_SUPPLY_USB_TYPE_SDP || !b->test_sdp_edge || ma != 500) {
+		return false;
+	}
+	if (b->auto_charging || b->programmed_ma != 500 || r->health != POWER_SUPPLY_HEALTH_GOOD ||
 	    r->lines[FAST] || r->lines[TRICKLE] || r->uv < 3200000 || r->uv >= 4200000 ||
 	    r->usbin_uv < USB_COLLAPSE_UV || r->usbin_uv > 5250000)
 		return false;
@@ -517,6 +525,7 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 {
 	enum power_supply_usb_type source = READ_ONCE(detected_source);
 	unsigned int ma = READ_ONCE(budget_ma);
+	int previous_limit = b->programmed_ma;
 	int fsm = -ENODATA, ret;
 
 	/* Keep DCP at its previously tested limit. For CDP require the
@@ -531,10 +540,10 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	if (r->lines[USB] && r->usb_type == POWER_SUPPLY_USB_TYPE_UNKNOWN && ma >= 100)
 		r->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
 	if (r->vreg_edges) {
-		if (source == POWER_SUPPLY_USB_TYPE_SDP && r->vreg_edges == 1 &&
+		if (r->vreg_edges == 1 &&
 		    !b->input_edge_seen && !b->voltage_fault &&
 		    time_before_eq(jiffies, b->step_started + msecs_to_jiffies(100)) &&
-		    r->ua <= 0 && input_only_at_500(b, r, ma, &fsm)) {
+		    r->ua <= 0 && input_only_at_500(b, r, source, ma, &fsm)) {
 			b->input_edge_seen = true;
 			b->checking_input = true;
 			b->next_raise = jiffies + msecs_to_jiffies(POLL_MS);
@@ -545,7 +554,7 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 			r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 		}
 	} else if (b->checking_input && r->lines[USB] &&
-		   (source != POWER_SUPPLY_USB_TYPE_SDP || !input_only_at_500(b, r, ma, &fsm))) {
+		   !input_only_at_500(b, r, source, ma, &fsm)) {
 		b->voltage_fault = true;
 		dev_warn(b->dev, "USB input-only follow-up failed: fsm=%d cell=%d uV USBIN=%d uV\n",
 			 fsm, r->uv, r->usbin_uv);
@@ -579,6 +588,8 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	    r->health != POWER_SUPPLY_HEALTH_GOOD || r->uv < 3200000)
 		return inhibit(b);
 	ret = set_input_limit(b, b->auto_charging ? ma : min(ma, 500U), r->usbin_uv);
+	if (!ret && b->programmed_ma != previous_limit)
+		b->step_source = source;
 	if (!ret) {
 		/* LG programs IUSB and its trim before enabling the cell
 		 * charger at startup. Let the input settle on its own first.
@@ -770,8 +781,9 @@ static int v500_probe(struct platform_device *pdev)
 	b->active = of_property_read_bool(dev->of_node, "lge,enable-usb-charging");
 	b->test_cdp_1500 = of_property_read_bool(dev->of_node, "lge,test-cdp-1500ma");
 	b->test_sdp_edge = of_property_read_bool(dev->of_node, "lge,test-sdp-input-edge");
-	if (b->test_sdp_edge) {
-		if (!b->active || b->test_cdp_1500)
+	b->test_cdp_edge = of_property_read_bool(dev->of_node, "lge,test-cdp-input-edge");
+	if (b->test_sdp_edge || b->test_cdp_edge) {
+		if (!b->active || b->test_cdp_1500 != b->test_cdp_edge)
 			return -EINVAL;
 		b->batfet_irq = platform_get_irq_byname(pdev, "batfet");
 		if (b->batfet_irq < 0)

@@ -83,6 +83,15 @@ case ${V500_TEST_SDP_INPUT_EDGE:-0} in
        printf '\n&v500_battery { lge,test-sdp-input-edge; };\n' >> "$build_dir/board/$dts.dts" ;;
     *) echo 'V500_TEST_SDP_INPUT_EDGE must be 0 or 1' >&2; exit 2 ;;
 esac
+case ${V500_TEST_CDP_INPUT_EDGE:-0} in
+    0) ;;
+    1) [[ $probe == lineage21 && $usb_charging == 1 && ${V500_TEST_CDP_1500:-0} == 1 &&
+          ${V500_M6_WALL_CHARGE:-0} == 0 && ${V500_M6_MANUAL_SESSION:-0} == 0 ]] ||
+           { echo 'CDP input-edge measurement requires the timed 1500 mA Android profile' >&2; exit 2; }
+       # A warm start at a connected CDP can first enumerate as SDP.
+       printf '\n&v500_battery { lge,test-sdp-input-edge; lge,test-cdp-input-edge; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_TEST_CDP_INPUT_EDGE must be 0 or 1' >&2; exit 2 ;;
+esac
 dtb="$build_dir/board/$dts.dtb"
 cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ -I "$source_dir/arch/arm/boot/dts" -I "$source_dir/include" \
     "$build_dir/board/$dts.dts" -o "$build_dir/board/display.pp"
