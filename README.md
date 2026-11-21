@@ -14,6 +14,12 @@ With VBUS present, `usb/voltage_now` reports the PM8921 USBIN ADC reading in mic
 
 A standard data-port test reached 500 mA with this pacing and then tripped the regulator overshoot interlock. Sustained charging at this step remains under investigation.
 
+During startup the port first programs the input limit and trim, releases USB suspend, and waits for the input to settle before setting automatic cell charging. This follows the ordering in the LG charger initialization. The standard profile records the PM8921 charger state on a regulator overshoot and inhibits the input.
+
+The optional timed Android measurement profile `V500_TEST_SDP_INPUT_EDGE=1` checks one rising edge within 100 ms of reaching 500 mA on a detected standard data port. It requires the automatic charger off, an open battery FET, a cleared regulator signal, charger state 1, valid temperature and supply readings, and a cell voltage below the 4.20 V target. The driver keeps the cell charger off while it rechecks the input and FET. A second edge or a failed observation inhibits the input. This profile excludes high-current CDP and wall-charger sessions.
+
+The timed profile sustained its 500 mA input limit and positive net cell current in a short screen-off data-port test. Full-cycle qualification remains open.
+
 The LD083WU1 panel controls its LM3532 illumination through the Linux backlight class at `/sys/class/backlight/panel-backlight`. DRM blanks the light when disabling the display and restores its selected brightness when enabling it.
 
 During GPU runtime suspend, the V500 Adreno 320 driver waits up to 100 ms for all six VBIF clients to acknowledge the halt request. If any acknowledgment is missing, it releases the request and returns busy. This bounds the time a newly submitted frame can spend behind this particular poll.

@@ -25,9 +25,9 @@
 			     <10 IRQ_TYPE_EDGE_BOTH>, <20 IRQ_TYPE_EDGE_RISING>,
 			     <17 IRQ_TYPE_EDGE_BOTH>, <16 IRQ_TYPE_EDGE_BOTH>,
 			     <21 IRQ_TYPE_EDGE_RISING>, <22 IRQ_TYPE_EDGE_RISING>,
-			     <47 IRQ_TYPE_EDGE_RISING>;
+			     <47 IRQ_TYPE_EDGE_RISING>, <44 IRQ_TYPE_EDGE_BOTH>;
 		interrupt-names = "usb", "present", "temp-ok", "charger-hot",
 				  "vbat-ov", "failed", "fast", "trickle", "done", "atc-failed",
-				  "vreg-ov";
+				  "vreg-ov", "batfet";
 	};
 };

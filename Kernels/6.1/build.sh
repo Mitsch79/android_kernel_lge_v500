@@ -75,6 +75,14 @@ case ${V500_TEST_CDP_1500:-0} in
     1) printf '\n&v500_battery { lge,test-cdp-1500ma; };\n' >> "$build_dir/board/$dts.dts" ;;
     *) echo 'V500_TEST_CDP_1500 must be 0 or 1' >&2; exit 2 ;;
 esac
+case ${V500_TEST_SDP_INPUT_EDGE:-0} in
+    0) ;;
+    1) [[ $probe == lineage21 && $usb_charging == 1 && ${V500_TEST_CDP_1500:-0} == 0 &&
+          ${V500_M6_WALL_CHARGE:-0} == 0 && ${V500_M6_MANUAL_SESSION:-0} == 0 ]] ||
+           { echo 'SDP input-only measurement requires the timed standard Android charging profile' >&2; exit 2; }
+       printf '\n&v500_battery { lge,test-sdp-input-edge; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_TEST_SDP_INPUT_EDGE must be 0 or 1' >&2; exit 2 ;;
+esac
 dtb="$build_dir/board/$dts.dtb"
 cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ -I "$source_dir/arch/arm/boot/dts" -I "$source_dir/include" \
     "$build_dir/board/$dts.dts" -o "$build_dir/board/display.pp"

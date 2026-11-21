@@ -44,7 +44,7 @@ static const char * const irq_names[] = {
 
 struct v500_reading {
 	bool lines[IRQ_COUNT];
-	bool vreg_edge;
+	unsigned int vreg_edges;
 	int usbin_uv;
 	int temp, uv, ua, uah, capacity, health, status, limit_ua, usb_type;
 };
@@ -62,6 +62,10 @@ struct v500_battery {
 	int irq[IRQ_COUNT], gain_codes, ref_low, ref_high, error;
 	int saved_percent, initial_offset_uah, ocv_base_uah;
 	int usb_trim_base, programmed_ma;
+	bool auto_charging;
+	bool test_sdp_edge, input_edge_seen, checking_input;
+	int batfet_irq;
+	unsigned long step_started;
 	int collapse_limit_ma;
 	unsigned long next_raise;
 	bool usb_trim_table1;
@@ -116,7 +120,12 @@ static int checked_bits(struct regmap *map, unsigned int reg, u8 mask, u8 value)
 
 static int inhibit(struct v500_battery *b)
 {
+	if (b->checking_input) {
+		b->voltage_fault = true;
+		b->checking_input = false;
+	}
 	b->programmed_ma = 0;
+	b->auto_charging = false;
 	return checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND, USB_SUSPEND);
 }
 
@@ -202,7 +211,8 @@ static int set_input_limit(struct v500_battery *b, int ma, int usbin_uv)
 	if (ret || restore)
 		return ret ?: restore;
 	b->programmed_ma = step->ma;
-	b->next_raise = jiffies + msecs_to_jiffies(POLL_MS);
+	b->step_started = jiffies;
+	b->next_raise = b->step_started + msecs_to_jiffies(POLL_MS);
 	dev_info(b->dev, "USB input limit read back: %d mA (USBIN before change %d uV)\n",
 		 step->ma, usbin_uv);
 	/* Check the loaded input again on LG's 100 ms timescale. An
@@ -415,7 +425,7 @@ static int read_gauge(struct v500_battery *b, struct v500_reading *r)
  */
 static int pack_health(const struct v500_reading *r)
 {
-	if (r->lines[VREG_OV] || r->vreg_edge || r->uv >= 4320000)
+	if (r->lines[VREG_OV] || r->uv >= 4320000)
 		return POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 	if (r->lines[CHARGER_HOT] || r->temp >= 420)
 		return POWER_SUPPLY_HEALTH_OVERHEAT;
@@ -424,6 +434,24 @@ static int pack_health(const struct v500_reading *r)
 	if (!r->lines[TEMP_OK] || r->lines[FAILED] || r->lines[ATC_FAILED])
 		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
 	return POWER_SUPPLY_HEALTH_GOOD;
+}
+
+/* LG's pm_chg_get_fsm_state(): capture once before inhibiting. Only
+ * read the captured banks after the input shutdown has been issued.
+ */
+static int read_captured_fsm(struct v500_battery *b)
+{
+	unsigned int low, high;
+	int ret;
+
+	ret = regmap_write(b->map, CHG_TEST, 0x70);
+	if (!ret)
+		ret = regmap_read(b->map, CHG_TEST, &low);
+	if (!ret)
+		ret = regmap_write(b->map, CHG_TEST, 0x40);
+	if (!ret)
+		ret = regmap_read(b->map, CHG_TEST, &high);
+	return ret ? ret : (int)((low & 0xf) | ((high & 1) << 4));
 }
 
 static int sample_pack(struct v500_battery *b, struct v500_reading *r)
@@ -455,16 +483,41 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 	ret = read_gauge(b, r);
 	if (ret)
 		return ret;
-	r->vreg_edge = atomic_xchg(&b->vreg_pending, 0);
+	r->vreg_edges = atomic_xchg(&b->vreg_pending, 0);
 	r->health = pack_health(r);
 	return 0;
+}
+
+/* Only qualify the input-only transition measured on AWIFI. Before
+ * letting the cell charger start, recheck the actual PMIC controls,
+ * the open battery FET and the supply readings on the next samples.
+ */
+static bool input_only_at_500(struct v500_battery *b, const struct v500_reading *r,
+			      unsigned int ma, int *fsm)
+{
+	unsigned int ctrl;
+	bool fet_closed;
+
+	if (!b->test_sdp_edge || b->auto_charging || b->programmed_ma != 500 || ma != 500 ||
+	    r->usb_type != POWER_SUPPLY_USB_TYPE_SDP || r->health != POWER_SUPPLY_HEALTH_GOOD ||
+	    r->lines[FAST] || r->lines[TRICKLE] || r->uv < 3200000 || r->uv >= 4200000 ||
+	    r->usbin_uv < USB_COLLAPSE_UV || r->usbin_uv > 5250000)
+		return false;
+	if (regmap_read(b->map, CHG_CTRL3, &ctrl) ||
+	    irq_get_irqchip_state(b->batfet_irq, IRQCHIP_STATE_LINE_LEVEL, &fet_closed) ||
+	    regmap_write(b->map, CHG_TEST, 0xc2))
+		return false;
+	*fsm = read_captured_fsm(b);
+	dev_info(b->dev, "USB input-only check: fsm=%d BATFET=%d ctrl3=%02x cell=%d uV USBIN=%d uV edges=%u\n",
+		 *fsm, fet_closed, ctrl, r->uv, r->usbin_uv, r->vreg_edges);
+	return *fsm == 1 && !fet_closed && !(ctrl & (AUTO_CHARGE | USB_SUSPEND));
 }
 
 static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 {
 	enum power_supply_usb_type source = READ_ONCE(detected_source);
 	unsigned int ma = READ_ONCE(budget_ma);
-	int ret;
+	int fsm = -ENODATA, ret;
 
 	/* Keep DCP at its previously tested limit. For CDP require the
 	 * electrical signature and the configured gadget power request.
@@ -477,6 +530,26 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	r->usb_type = r->lines[USB] ? source : POWER_SUPPLY_USB_TYPE_UNKNOWN;
 	if (r->lines[USB] && r->usb_type == POWER_SUPPLY_USB_TYPE_UNKNOWN && ma >= 100)
 		r->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
+	if (r->vreg_edges) {
+		if (source == POWER_SUPPLY_USB_TYPE_SDP && r->vreg_edges == 1 &&
+		    !b->input_edge_seen && !b->voltage_fault &&
+		    time_before_eq(jiffies, b->step_started + msecs_to_jiffies(100)) &&
+		    r->ua <= 0 && input_only_at_500(b, r, ma, &fsm)) {
+			b->input_edge_seen = true;
+			b->checking_input = true;
+			b->next_raise = jiffies + msecs_to_jiffies(POLL_MS);
+			dev_info(b->dev, "USB input-only edge: fsm=%d BATFET=open auto=0 cell=%d uV USBIN=%d uV\n",
+				 fsm, r->uv, r->usbin_uv);
+			schedule_delayed_work(&b->work, msecs_to_jiffies(100));
+		} else {
+			r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+		}
+	} else if (b->checking_input && r->lines[USB] &&
+		   (source != POWER_SUPPLY_USB_TYPE_SDP || !input_only_at_500(b, r, ma, &fsm))) {
+		b->voltage_fault = true;
+		dev_warn(b->dev, "USB input-only follow-up failed: fsm=%d cell=%d uV USBIN=%d uV\n",
+			 fsm, r->uv, r->usbin_uv);
+	}
 	/* Regulator overshoot can clear as soon as USB is suspended.
 	 * Do not retry a hardware overvoltage every polling interval.
 	 * Clear the interlock only after observing physical VBUS removal.
@@ -484,20 +557,45 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	if (!r->lines[USB]) {
 		b->voltage_fault = false;
 		b->collapse_limit_ma = 0;
-	} else if (!b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
-		dev_warn(b->dev, "USB charge inhibited: VREG_OV=%d edge=%d VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA\n",
-			 r->lines[VREG_OV], r->vreg_edge, r->lines[VBAT_OV],
-			 r->uv, r->ua, r->temp, b->programmed_ma);
+		b->input_edge_seen = false;
+		b->checking_input = false;
+	} else if (b->active && !b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
+		int limit = b->programmed_ma;
+		bool charging = b->auto_charging;
+		int fsm = regmap_write(b->map, CHG_TEST, 0xc2);
+
 		b->voltage_fault = true;
+		ret = inhibit(b);
+		if (!ret && !fsm)
+			fsm = read_captured_fsm(b);
+		dev_warn(b->dev, "USB charge inhibited: VREG_OV=%d edge=%d VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA auto=%d fsm=%d inhibit_rc=%d\n",
+			 r->lines[VREG_OV], r->vreg_edges, r->lines[VBAT_OV],
+			 r->uv, r->ua, r->temp, limit, charging, ret ? -ENODATA : fsm, ret);
+		return ret;
 	}
 	if (b->active && b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_GOOD)
 		r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 	if (!b->active || ma < 100 || !r->lines[USB] ||
 	    r->health != POWER_SUPPLY_HEALTH_GOOD || r->uv < 3200000)
 		return inhibit(b);
-	ret = set_input_limit(b, ma, r->usbin_uv);
-	if (!ret)
-		ret = checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND, AUTO_CHARGE);
+	ret = set_input_limit(b, b->auto_charging ? ma : min(ma, 500U), r->usbin_uv);
+	if (!ret) {
+		/* LG programs IUSB and its trim before enabling the cell
+		 * charger at startup. Let the input settle on its own first.
+		 * A genuinely small gadget budget can also finish settling.
+		 */
+		bool enable = b->auto_charging || (time_after_eq(jiffies, b->next_raise) &&
+						  !atomic_read(&b->vreg_pending));
+
+		ret = checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND,
+				   enable ? AUTO_CHARGE : 0);
+		if (!ret && enable != b->auto_charging) {
+			b->auto_charging = enable;
+			b->checking_input = false;
+			dev_info(b->dev, "USB cell charging enabled after input settled at %d mA, USBIN %d uV\n",
+				 b->programmed_ma, r->usbin_uv);
+		}
+	}
 	if (!ret)
 		r->limit_ua = b->programmed_ma * 1000;
 	return ret;
@@ -520,16 +618,16 @@ static void sample_work(struct work_struct *work)
 		dev_warn_ratelimited(b->dev, "PM8921 battery sample/control: %d\n", ret);
 	} else if (!r.lines[USB]) {
 		r.status = POWER_SUPPLY_STATUS_DISCHARGING;
-	} else if (r.limit_ua && r.lines[DONE]) {
+	} else if (b->auto_charging && r.limit_ua && r.lines[DONE]) {
 		r.status = POWER_SUPPLY_STATUS_FULL;
-	} else if (r.limit_ua && (r.lines[FAST] || r.lines[TRICKLE]) && r.ua > 0) {
+	} else if (b->auto_charging && r.limit_ua && (r.lines[FAST] || r.lines[TRICKLE]) && r.ua > 0) {
 		r.status = POWER_SUPPLY_STATUS_CHARGING;
 	} else {
 		r.status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 	}
 	if (!ret && b->test_cdp_1500)
 		dev_info(b->dev, "CDP test sample: VBAT_OV=%d VREG_OV=%d edge=%d cell_uV=%d temp_deciC=%d net_uA=%d input_limit_uA=%d\n",
-			 r.lines[VBAT_OV], r.lines[VREG_OV], r.vreg_edge,
+			 r.lines[VBAT_OV], r.lines[VREG_OV], r.vreg_edges,
 			 r.uv, r.temp, r.ua, r.limit_ua);
 	mutex_lock(&b->lock);
 	b->error = ret;
@@ -642,7 +740,7 @@ static irqreturn_t v500_vreg_ov_irq(int irq, void *data)
 	struct v500_battery *b = data;
 	unsigned long flags;
 
-	atomic_set(&b->vreg_pending, 1);
+	atomic_inc(&b->vreg_pending);
 	spin_lock_irqsave(&budget_lock, flags);
 	if (controller == b && !b->stopped)
 		mod_delayed_work(system_wq, &b->work, 0);
@@ -671,6 +769,14 @@ static int v500_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(clk), "charger TCXO\n");
 	b->active = of_property_read_bool(dev->of_node, "lge,enable-usb-charging");
 	b->test_cdp_1500 = of_property_read_bool(dev->of_node, "lge,test-cdp-1500ma");
+	b->test_sdp_edge = of_property_read_bool(dev->of_node, "lge,test-sdp-input-edge");
+	if (b->test_sdp_edge) {
+		if (!b->active || b->test_cdp_1500)
+			return -EINVAL;
+		b->batfet_irq = platform_get_irq_byname(pdev, "batfet");
+		if (b->batfet_irq < 0)
+			return b->batfet_irq;
+	}
 	ret = start_pmic(b);
 	if (ret)
 		return dev_err_probe(dev, ret, "charger initialization\n");
