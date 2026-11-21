@@ -33,6 +33,7 @@
 #define OUTPUT_SEL GENMASK(4, 2)
 #define PACK_UAH 4600000
 #define POLL_MS 2000
+#define USB_COLLAPSE_UV 4520000 /* AWIFI adaptive input threshold */
 
 enum { USB, PRESENT, TEMP_OK, CHARGER_HOT, VBAT_OV, FAILED,
        FAST, TRICKLE, DONE, ATC_FAILED, VREG_OV, IRQ_COUNT };
@@ -44,13 +45,14 @@ static const char * const irq_names[] = {
 struct v500_reading {
 	bool lines[IRQ_COUNT];
 	bool vreg_edge;
+	int usbin_uv;
 	int temp, uv, ua, uah, capacity, health, status, limit_ua, usb_type;
 };
 
 struct v500_battery {
 	struct device *dev;
 	struct regmap *map;
-	struct iio_channel *therm, *vbat, *ref625, *ref1250;
+	struct iio_channel *therm, *vbat, *usbin, *ref625, *ref1250;
 	struct power_supply *battery, *usb;
 	struct delayed_work work;
 	struct mutex lock;
@@ -60,6 +62,8 @@ struct v500_battery {
 	int irq[IRQ_COUNT], gain_codes, ref_low, ref_high, error;
 	int saved_percent, initial_offset_uah, ocv_base_uah;
 	int usb_trim_base, programmed_ma;
+	int collapse_limit_ma;
+	unsigned long next_raise;
 	bool usb_trim_table1;
 	u16 last_ocv;
 	bool active, stopped, voltage_fault, test_cdp_1500;
@@ -150,18 +154,39 @@ static const struct v500_usb_step {
 	{ 1300, 6, 15, 6 }, { 1500, 7, 16, 6 },
 };
 
-static int set_input_limit(struct v500_battery *b, int ma)
+static int set_input_limit(struct v500_battery *b, int ma, int usbin_uv)
 {
-	const struct v500_usb_step *step = &usb_steps[0];
+	const struct v500_usb_step *step;
 	unsigned int page;
-	int trim, ret, restore, i;
+	int trim, ret, restore, i = 0;
 
-	for (i = 1; i < ARRAY_SIZE(usb_steps) && ma >= usb_steps[i].ma; i++) {
-		step = &usb_steps[i];
-		/* Raise a CDP in steps over consecutive healthy samples. */
-		if (step->ma > b->programmed_ma)
-			break;
+	/* Back off one calibrated step on sag. Retain the lower ceiling
+	 * until VBUS removal, including across gadget budget changes.
+	 */
+	while (i + 1 < ARRAY_SIZE(usb_steps) && usb_steps[i + 1].ma <= b->programmed_ma)
+		i++;
+	/* At entry the input can still be suspended. At the lowest step
+	 * there is no previous loaded step to fall back to: wait at 100 mA
+	 * for a healthy sample without latching the startup reading.
+	 */
+	if (!i && usbin_uv < USB_COLLAPSE_UV)
+		ma = min(ma, 100);
+	else if (usbin_uv < USB_COLLAPSE_UV) {
+		int ceiling = usb_steps[max(i - 1, 0)].ma;
+
+		if (!b->collapse_limit_ma || ceiling < b->collapse_limit_ma) {
+			b->collapse_limit_ma = ceiling;
+			dev_info(b->dev, "USB input sag: %d uV, ceiling %d mA\n", usbin_uv, ceiling);
+		}
 	}
+	if (b->collapse_limit_ma)
+		ma = min(ma, b->collapse_limit_ma);
+	while (i && usb_steps[i].ma > ma)
+		i--;
+	if (b->programmed_ma && time_after_eq(jiffies, b->next_raise) &&
+	    i + 1 < ARRAY_SIZE(usb_steps) && usb_steps[i + 1].ma <= ma)
+		i++;
+	step = &usb_steps[i];
 	if (b->programmed_ma == step->ma)
 		return 0;
 	ret = checked_bits(b->map, USB_LIMIT_REG, USB_LIMIT_MASK, step->coarse << 2);
@@ -177,7 +202,13 @@ static int set_input_limit(struct v500_battery *b, int ma)
 	if (ret || restore)
 		return ret ?: restore;
 	b->programmed_ma = step->ma;
-	dev_info(b->dev, "USB input limit read back: %d mA\n", step->ma);
+	b->next_raise = jiffies + msecs_to_jiffies(POLL_MS);
+	dev_info(b->dev, "USB input limit read back: %d mA (USBIN before change %d uV)\n",
+		 step->ma, usbin_uv);
+	/* Check the loaded input again on LG's 100 ms timescale. An
+	 * earlier IRQ/budget callback may already have queued a sample.
+	 */
+	schedule_delayed_work(&b->work, msecs_to_jiffies(100));
 	return 0;
 }
 
@@ -414,6 +445,13 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 		return ret;
 	if (r->uv < 2500000 || r->uv > 4500000)
 		return -ERANGE;
+	if (r->lines[USB] && b->usbin) {
+		ret = iio_read_channel_processed(b->usbin, &r->usbin_uv);
+		if (ret < 0)
+			return ret;
+		if (r->usbin_uv < 0)
+			return -ERANGE;
+	}
 	ret = read_gauge(b, r);
 	if (ret)
 		return ret;
@@ -443,9 +481,10 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	 * Do not retry a hardware overvoltage every polling interval.
 	 * Clear the interlock only after observing physical VBUS removal.
 	 */
-	if (!r->lines[USB])
+	if (!r->lines[USB]) {
 		b->voltage_fault = false;
-	else if (!b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
+		b->collapse_limit_ma = 0;
+	} else if (!b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
 		dev_warn(b->dev, "USB charge inhibited: VREG_OV=%d edge=%d VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA\n",
 			 r->lines[VREG_OV], r->vreg_edge, r->lines[VBAT_OV],
 			 r->uv, r->ua, r->temp, b->programmed_ma);
@@ -456,7 +495,7 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	if (!b->active || ma < 100 || !r->lines[USB] ||
 	    r->health != POWER_SUPPLY_HEALTH_GOOD || r->uv < 3200000)
 		return inhibit(b);
-	ret = set_input_limit(b, ma);
+	ret = set_input_limit(b, ma, r->usbin_uv);
 	if (!ret)
 		ret = checked_bits(b->map, CHG_CTRL3, AUTO_CHARGE | USB_SUSPEND, AUTO_CHARGE);
 	if (!ret)
@@ -510,7 +549,7 @@ static enum power_supply_property battery_props[] = {
 };
 static enum power_supply_property usb_props[] = {
 	POWER_SUPPLY_PROP_ONLINE, POWER_SUPPLY_PROP_CURRENT_MAX, POWER_SUPPLY_PROP_VOLTAGE_MAX,
-	POWER_SUPPLY_PROP_USB_TYPE,
+	POWER_SUPPLY_PROP_USB_TYPE, POWER_SUPPLY_PROP_VOLTAGE_NOW,
 };
 static enum power_supply_usb_type usb_types[] = {
 	POWER_SUPPLY_USB_TYPE_UNKNOWN, POWER_SUPPLY_USB_TYPE_SDP, POWER_SUPPLY_USB_TYPE_DCP,
@@ -546,7 +585,11 @@ static int get_property(struct power_supply *psy, enum power_supply_property pro
 	case POWER_SUPPLY_PROP_STATUS: val->intval = r.status; break;
 	case POWER_SUPPLY_PROP_HEALTH: val->intval = r.health; break;
 	case POWER_SUPPLY_PROP_TEMP: val->intval = r.temp; break;
-	case POWER_SUPPLY_PROP_VOLTAGE_NOW: val->intval = r.uv; break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		if (psy->desc->type == POWER_SUPPLY_TYPE_USB && (!b->usbin || !r.lines[USB]))
+			return -ENODATA;
+		val->intval = psy->desc->type == POWER_SUPPLY_TYPE_USB ? r.usbin_uv : r.uv;
+		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW: val->intval = r.ua; break;
 	case POWER_SUPPLY_PROP_CAPACITY: val->intval = r.capacity; break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER: val->intval = r.uah; break;
@@ -637,6 +680,11 @@ static int v500_probe(struct platform_device *pdev)
 	b->vbat = devm_iio_channel_get(dev, "vbat");
 	if (IS_ERR(b->vbat))
 		return dev_err_probe(dev, PTR_ERR(b->vbat), "cell voltage\n");
+	if (of_property_match_string(dev->of_node, "io-channel-names", "usbin") >= 0) {
+		b->usbin = devm_iio_channel_get(dev, "usbin");
+		if (IS_ERR(b->usbin))
+			return dev_err_probe(dev, PTR_ERR(b->usbin), "USB input voltage\n");
+	}
 	b->ref625 = devm_iio_channel_get(dev, "ref625");
 	if (IS_ERR(b->ref625))
 		return dev_err_probe(dev, PTR_ERR(b->ref625), "625 mV reference\n");

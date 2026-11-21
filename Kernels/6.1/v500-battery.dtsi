@@ -16,8 +16,9 @@
 	v500_battery: battery-controller {
 		compatible = "lge,v500-pm8921-battery";
 		clocks = <&rpmcc RPM_XO_D0>;
-		io-channels = <&xoadc 0 8>, <&xoadc 0 1>, <&xoadc 0 12>, <&xoadc 0 13>;
-		io-channel-names = "thermistor", "vbat", "ref625", "ref1250";
+		io-channels = <&xoadc 0 8>, <&xoadc 0 1>, <&xoadc 0 12>, <&xoadc 0 13>,
+			      <&xoadc 0 10>;
+		io-channel-names = "thermistor", "vbat", "ref625", "ref1250", "usbin";
 		interrupt-parent = <&pmicintc>;
 		interrupts = <15 IRQ_TYPE_EDGE_BOTH>, <13 IRQ_TYPE_EDGE_BOTH>,
 			     <26 IRQ_TYPE_EDGE_BOTH>, <29 IRQ_TYPE_EDGE_BOTH>,

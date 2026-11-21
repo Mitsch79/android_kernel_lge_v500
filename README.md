@@ -10,6 +10,10 @@ The Android test configuration enables high-resolution timers on the Qualcomm on
 
 The PM8921 driver reports cell voltage, battery temperature and net cell current. Android builds enable budgeted USB charging by default. Set `V500_USB_CHARGING=0` when building the passive GUI test profile. The standard USB budget is capped at 500 mA. The higher CDP budget requires an explicit test build. Sustained net charging at 1.5 A with the display on remains unverified.
 
+With VBUS present, `usb/voltage_now` reports the PM8921 USBIN ADC reading in microvolts. The input starts at 100 mA and waits at least two seconds between increases. A reading below 4.520 V holds the initial step or lowers an established limit by one calibrated step. A reduced ceiling persists until an observed disconnect. The threshold and the 100 ms follow-up check derive from the AWIFI dedicated-charger routine. This port also applies the check to data ports. The regulator overshoot interrupt still inhibits charging until VBUS removal.
+
+A standard data-port test reached 500 mA with this pacing and then tripped the regulator overshoot interlock. Sustained charging at this step remains under investigation.
+
 The LD083WU1 panel controls its LM3532 illumination through the Linux backlight class at `/sys/class/backlight/panel-backlight`. DRM blanks the light when disabling the display and restores its selected brightness when enabling it.
 
 During GPU runtime suspend, the V500 Adreno 320 driver waits up to 100 ms for all six VBIF clients to acknowledge the halt request. If any acknowledgment is missing, it releases the request and returns busy. This bounds the time a newly submitted frame can spend behind this particular poll.
