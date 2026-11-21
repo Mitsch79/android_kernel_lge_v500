@@ -28,6 +28,7 @@
 #define USB_LIMIT_REG 0x005
 #define USB_LIMIT_MASK GENMASK(4, 2)
 #define BMS_CTRL 0x224
+#define LG_SHUTDOWN_SOC 0x107
 #define HOLD_DATA BIT(1)
 #define OUTPUT_SEL GENMASK(4, 2)
 #define PACK_UAH 4600000
@@ -55,6 +56,8 @@ struct v500_battery {
 	struct v500_reading sample;
 	unsigned long stamp;
 	int irq[IRQ_COUNT], gain_codes, ref_low, ref_high, error;
+	int saved_percent, initial_offset_uah, ocv_base_uah;
+	u16 last_ocv;
 	bool active, stopped, voltage_fault;
 };
 
@@ -118,12 +121,24 @@ static int start_pmic(struct v500_battery *b)
 		{ 0x217, 0x1f, (4400 - 3800) / 100 }, /* USB voltage regulation */
 		{ 0x21b, 0x7f, (180 - 1) / 4 }, /* hardware safety timer */
 	};
+	unsigned int ctrl, stored;
 	int i, ret;
 
 	msleep(4);
 	ret = regmap_multi_reg_write(b->map, clock_setup, ARRAY_SIZE(clock_setup));
 	if (!ret)
 		ret = inhibit(b);
+	/* LG's battery-backed scratch is valid across a warm restart with
+	 * the same pack. VREF is cleared by hardware on battery removal.
+	 */
+	b->saved_percent = -1;
+	if (!ret && !regmap_read(b->map, CHG_CTRL, &ctrl) && (ctrl & BIT(7)) &&
+	    !regmap_read(b->map, LG_SHUTDOWN_SOC, &stored)) {
+		if (stored == 0xff)
+			b->saved_percent = 0;
+		else if (stored > 0 && stored <= 100)
+			b->saved_percent = stored;
+	}
 	if (!ret)
 		ret = checked_bits(b->map, CHG_CTRL, BIT(7), BIT(7));
 	if (!ret)
@@ -249,11 +264,33 @@ static int read_gauge(struct v500_battery *b, struct v500_reading *r)
 	cc_uv = div_s64((s64)(s32)((u32)hi << 16 | lo) * 868056, 10000);
 	cc_uv = div_s64(cc_uv * 25000, div_s64(b->gain_codes * 542535LL, 100000));
 	cc_uah = div_s64(cc_uv * 56 * 100, 32764 * 3600);
-	remaining = div_s64((s64)ocv_capacity(ocv_mv, r->temp) * PACK_UAH, 100000) - cc_uah;
+	/* Keep the temperature associated with a given rest-voltage event.
+	 * Cooling during a display-off interval is not a coulomb transfer.
+	 */
+	if (b->last_ocv != ocv) {
+		b->ocv_base_uah = div_s64((s64)ocv_capacity(ocv_mv, r->temp) * PACK_UAH, 100000);
+		b->initial_offset_uah = 0;
+		b->last_ocv = ocv;
+	}
+	remaining = b->ocv_base_uah - cc_uah;
 	if (remaining < -PACK_UAH / 10 || remaining > PACK_UAH * 11 / 10)
 		return -ERANGE;
+	if (b->saved_percent >= 0) {
+		int delta = b->saved_percent * (PACK_UAH / 100) - remaining;
+
+		/* AWIFI accepts the last saved SOC within 25 percentage points.
+		 * The PMIC may still have the OCV measured before a load test.
+		 */
+		if (abs(delta) <= PACK_UAH / 4)
+			b->initial_offset_uah = delta;
+		dev_info(b->dev, "boot gauge: LG saved=%d%% OCV=%d mV estimate=%lld uAh offset=%d uAh\n",
+			 b->saved_percent, ocv_mv, remaining, b->initial_offset_uah);
+		b->saved_percent = -1;
+	}
+	remaining += b->initial_offset_uah;
 	r->uah = clamp_t(s64, remaining, 0, PACK_UAH);
-	r->capacity = r->uah / (PACK_UAH / 100);
+	/* Match the normal (non-charger-logo) LG Android display scale. */
+	r->capacity = min(100, DIV_ROUND_CLOSEST(r->uah, PACK_UAH / 100) * 104 / 101);
 	return 0;
 }
 
@@ -511,6 +548,20 @@ static int v500_probe(struct platform_device *pdev)
 
 static void v500_shutdown(struct platform_device *pdev)
 {
+	struct v500_battery *b = platform_get_drvdata(pdev);
+	unsigned int raw_soc;
+
+	/* Only store a fresh, healthy gauge on orderly shutdown. Keep the
+	 * original unscaled format consumed by 14.1, TWRP and the next boot.
+	 */
+	mutex_lock(&b->lock);
+	if (!b->error && b->sample.health == POWER_SUPPLY_HEALTH_GOOD &&
+	    time_before(jiffies, b->stamp + msecs_to_jiffies(3 * POLL_MS))) {
+		raw_soc = DIV_ROUND_CLOSEST(b->sample.uah, PACK_UAH / 100);
+		if (regmap_write(b->map, LG_SHUTDOWN_SOC, raw_soc ?: 0xff))
+			dev_warn(b->dev, "Could not save SOC at shutdown\n");
+	}
+	mutex_unlock(&b->lock);
 	if (pause_charger(&pdev->dev))
 		dev_err(&pdev->dev, "Cannot confirm charger inhibited at shutdown\n");
 }

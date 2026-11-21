@@ -60,7 +60,11 @@ cp "$source_dir/arch/arm/boot/dts"/qcom-apq8064{,-v2.0}.dtsi "$build_dir/board/"
 patch --batch --fuzz=0 -d "$build_dir/board" -p1 < "$port/v500-board-6.1.patch"
 dts=qcom-apq8064-lg-v500-display
 cat "$port/v500-battery.dtsi" >> "$build_dir/board/$dts.dts"
-case ${V500_USB_CHARGING:-0} in
+usb_charging=${V500_USB_CHARGING:-}
+if [[ -z $usb_charging ]]; then
+    if [[ $probe == lineage21 ]]; then usb_charging=1; else usb_charging=0; fi
+fi
+case $usb_charging in
     0) ;;
     1) printf '\n&v500_battery { lge,enable-usb-charging; };\n' >> "$build_dir/board/$dts.dts" ;;
     *) echo 'V500_USB_CHARGING must be 0 or 1' >&2; exit 2 ;;
