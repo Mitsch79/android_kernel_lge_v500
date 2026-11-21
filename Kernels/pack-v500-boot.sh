@@ -40,6 +40,14 @@ EOF
             "$port/v500-manual-session.c" -o "$build_dir/manual-session"
         printf 'file /v500-m6/manual-session %s/manual-session 0755 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"
     fi
+    if [[ ${V500_M6_WALL_CHARGE:-0} == 1 || ${V500_TEST_HOLD_TO_TEN:-0} == 1 ]]; then
+        [[ -f ${port:-/nonexistent}/v500-wall-charge.c && $stage_name == v500-m6 && ${usb_charging:-0} == 1 && $recovery_seconds == 600 ]]
+        "${compiler[@]}" "${userspace_cppflags[@]}" -DV500_HOLD_TO_TEN="${V500_TEST_HOLD_TO_TEN:-0}" \
+            -DV500_FULL_CYCLE="${V500_TEST_FULL_CYCLE:-0}" -O2 -Wall -Wextra -Werror -static \
+            "$port/v500-wall-charge.c" -o "$build_dir/v500-wall-charge"
+        qemu-arm "$build_dir/v500-wall-charge" --self-test
+        printf 'file /v500-m6/wall-charge %s/v500-wall-charge 0755 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"
+    fi
     if [[ ${V500_M6_COMPOSITION_TEST_ADB:-0} == 1 ]]; then
         [[ "$stage_name" == v500-m6 ]]
         printf 'file /v500-m6/composition-adb-root %s/v500-m6-stage-name 0400 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"

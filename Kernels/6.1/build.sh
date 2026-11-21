@@ -93,6 +93,21 @@ case ${V500_TEST_CDP_INPUT_EDGE:-0} in
     *) echo 'V500_TEST_CDP_INPUT_EDGE must be 0 or 1' >&2; exit 2 ;;
 esac
 dtb="$build_dir/board/$dts.dtb"
+case ${V500_TEST_HOLD_TO_TEN:-0} in
+    0) ;;
+    1) [[ $probe == lineage21 && $usb_charging == 1 && ${V500_TEST_SDP_INPUT_EDGE:-0} == 1 &&
+          ${V500_TEST_CDP_1500:-0} == 0 && ${V500_M6_MANUAL_SESSION:-0} == 0 &&
+          ${V500_M6_WALL_CHARGE:-0} == 0 && ${V500_M6_RECOVERY_SECONDS:-0} == 600 ]] ||
+           { echo 'Charge hold needs the supervised 500 mA Android test profile' >&2; exit 2; }
+       printf '\n&v500_battery { lge,test-hold-to-ten; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_TEST_HOLD_TO_TEN must be 0 or 1' >&2; exit 2 ;;
+esac
+case ${V500_TEST_FULL_CYCLE:-0} in
+    0) ;;
+    1) [[ ${V500_TEST_HOLD_TO_TEN:-0} == 1 ]] || { echo 'Full-cycle logging requires the one-shot hold' >&2; exit 2; }
+       printf '\n&v500_battery { lge,test-cycle-awake; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_TEST_FULL_CYCLE must be 0 or 1' >&2; exit 2 ;;
+esac
 cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ -I "$source_dir/arch/arm/boot/dts" -I "$source_dir/include" \
     "$build_dir/board/$dts.dts" -o "$build_dir/board/display.pp"
 dtc -I dts -O dtb -o "$dtb" "$build_dir/board/display.pp"

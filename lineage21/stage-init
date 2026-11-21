@@ -56,6 +56,11 @@ if [ -s "$stage/misc/adb/adb_keys" ] || [ -f /v500-m6/composition-adb-root ]; th
 fi
 
 # Loop devices keep the backing files open. Android initializes its own /dev.
+if [ -x /v500-m6/wall-charge ]; then
+    "$bb" mount -t sysfs sysfs /sys || fail 'Cannot mount sysfs for the charge logger'
+    /v500-m6/wall-charge "$images" || fail 'Cannot start the charge logger'
+    "$bb" umount -l /sys || fail 'Cannot detach charge logger sysfs'
+fi
 "$bb" umount -l "$stage" || fail 'Cannot detach the backing mount'
 if [ -f /v500-m6/gpu-boot-keep-active ]; then
     "$bb" mount -t sysfs sysfs /sys || fail 'Cannot mount sysfs for the GPU power comparison'
@@ -99,6 +104,10 @@ if [ -x /v500-m6/manual-session ]; then
     fail 'Cannot start Android'
 fi
 read -r recovery_seconds < /v500-m6/recovery-seconds || fail 'Cannot read the recovery timeout'
-"$bb" umount /dev || fail 'Cannot release bootstrap devtmpfs'
-/v500-m6/reboot-recovery --after "$recovery_seconds" &
+if [ -x /v500-m6/wall-charge ]; then
+    "$bb" umount -l /dev || fail 'Cannot detach charge logger devtmpfs'
+else
+    "$bb" umount /dev || fail 'Cannot release bootstrap devtmpfs'
+    /v500-m6/reboot-recovery --after "$recovery_seconds" &
+fi
 exec /init

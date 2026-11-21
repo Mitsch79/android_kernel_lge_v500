@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeup.h>
 #include <linux/power/v500-battery.h>
 #include <linux/power_supply.h>
 #include <linux/regmap.h>
@@ -72,6 +73,7 @@ struct v500_battery {
 	bool usb_trim_table1;
 	u16 last_ocv;
 	bool active, stopped, voltage_fault, test_cdp_1500;
+	bool hold_to_ten;
 };
 
 /* ChipIdea can call vbus_draw from atomic context. Serialize registration
@@ -584,6 +586,13 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	}
 	if (b->active && b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_GOOD)
 		r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+	if (b->hold_to_ten) {
+		if (r->capacity > 10 || r->health != POWER_SUPPLY_HEALTH_GOOD)
+			return inhibit(b);
+		b->hold_to_ten = false;
+		dev_info(b->dev, "one-shot charge hold released at %d%%, cell %d uV\n",
+			 r->capacity, r->uv);
+	}
 	if (!b->active || ma < 100 || !r->lines[USB] ||
 	    r->health != POWER_SUPPLY_HEALTH_GOOD || r->uv < 3200000)
 		return inhibit(b);
@@ -759,6 +768,14 @@ static irqreturn_t v500_vreg_ov_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static void end_cycle_wake(void *data)
+{
+	struct wakeup_source *ws = data;
+
+	__pm_relax(ws);
+	wakeup_source_unregister(ws);
+}
+
 static int v500_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -782,6 +799,22 @@ static int v500_probe(struct platform_device *pdev)
 	b->test_cdp_1500 = of_property_read_bool(dev->of_node, "lge,test-cdp-1500ma");
 	b->test_sdp_edge = of_property_read_bool(dev->of_node, "lge,test-sdp-input-edge");
 	b->test_cdp_edge = of_property_read_bool(dev->of_node, "lge,test-cdp-input-edge");
+	b->hold_to_ten = of_property_read_bool(dev->of_node, "lge,test-hold-to-ten");
+	if (b->hold_to_ten && (!b->active || !b->test_sdp_edge || b->test_cdp_1500))
+		return -EINVAL;
+	if (IS_ENABLED(CONFIG_PM_SLEEP) && of_property_read_bool(dev->of_node, "lge,test-cycle-awake")) {
+		struct wakeup_source *ws;
+
+		if (!b->hold_to_ten)
+			return -EINVAL;
+		ws = wakeup_source_register(dev, "v500-cycle-logger");
+		if (!ws)
+			return -ENOMEM;
+		__pm_stay_awake(ws);
+		ret = devm_add_action_or_reset(dev, end_cycle_wake, ws);
+		if (ret)
+			return ret;
+	}
 	if (b->test_sdp_edge || b->test_cdp_edge) {
 		if (!b->active || b->test_cdp_1500 != b->test_cdp_edge)
 			return -EINVAL;
