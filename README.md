@@ -27,4 +27,6 @@ bash kernel/lge/v500-port/Kernels/6.1/build.sh lineage21
 
 The boot packer expects a matching LG V500 reference boot image, the 14.1 tree's host `mkbootimg` and `device/lge/gpad83-common/bump.py`, and locally extracted `a300_pfp.fw` and `a300_pm4.fw` under `vendor/lge/v500/proprietary/vendor/firmware` in that tree. Prepare a static ARM BusyBox at `$V500_MAINLINE_WORK/busybox-armhf/bin/busybox`. Host tools include an ARM hard-float cross-compiler, kernel build prerequisites, device-tree-compiler, Python 2 and 3, and qemu-arm.
 
-The resulting M6 test boot uses the V500 recovery timer and Android userdebug configuration. The export includes its SHA-256 list, effective kernel configuration and device tree. M6 staging uses separate ext4 test images. A recovery-installable daily-use ROM is a later milestone.
+The default M6 boot uses the V500 recovery timer. For a manual GUI session, set `V500_M6_MANUAL_SESSION=1` when building the LineageOS 21 boot image. After the loop devices are ready, an initramfs helper takes over the hardware watchdog and feeds it while the battery reports good health, a charge of at least 30% and a temperature from 10 to below 42 °C. The session has no elapsed-time cutoff. The tested GUI profile uses `V500_USB_CHARGING=0`.
+
+The export includes its SHA-256 list, effective kernel configuration and device tree. M6 staging uses separate ext4 test images.

@@ -91,6 +91,13 @@ if [ -f /v500-m6/graphics-boot-trace ]; then
     "$bb" umount /sys/kernel/tracing && "$bb" umount /sys || fail 'Cannot release bootstrap trace mounts'
 fi
 printf '<6>v500-m6: Android 14 loop devices are ready\n' >/dev/kmsg
+if [ -x /v500-m6/manual-session ]; then
+    "$bb" mount -t sysfs sysfs /sys || fail 'Cannot mount sysfs for the manual session'
+    /v500-m6/manual-session || fail 'Cannot monitor the manual session'
+    "$bb" umount -l /sys && "$bb" umount -l /dev || fail 'Cannot detach manual session mounts'
+    exec /init
+    fail 'Cannot start Android'
+fi
 read -r recovery_seconds < /v500-m6/recovery-seconds || fail 'Cannot read the recovery timeout'
 "$bb" umount /dev || fail 'Cannot release bootstrap devtmpfs'
 /v500-m6/reboot-recovery --after "$recovery_seconds" &

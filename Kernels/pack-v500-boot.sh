@@ -34,6 +34,12 @@ file /v500-m6/bootstrap $m6/stage-init 0755 0 0
 file /v500-m6/stage-name $build_dir/v500-m6-stage-name 0644 0 0
 file /v500-m6/recovery-seconds $build_dir/v500-m6-recovery-seconds 0444 0 0
 EOF
+    if [[ ${V500_M6_MANUAL_SESSION:-0} == 1 ]]; then
+        [[ $stage_name == v500-m6 && ${V500_M6_WALL_CHARGE:-0} == 0 && -f ${port:-/nonexistent}/v500-manual-session.c ]]
+        "${compiler[@]}" "${userspace_cppflags[@]}" -O2 -Wall -Wextra -Werror -static \
+            "$port/v500-manual-session.c" -o "$build_dir/manual-session"
+        printf 'file /v500-m6/manual-session %s/manual-session 0755 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"
+    fi
     if [[ ${V500_M6_COMPOSITION_TEST_ADB:-0} == 1 ]]; then
         [[ "$stage_name" == v500-m6 ]]
         printf 'file /v500-m6/composition-adb-root %s/v500-m6-stage-name 0400 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"
