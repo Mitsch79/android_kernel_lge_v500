@@ -43,7 +43,7 @@ static const char * const irq_names[] = {
 
 struct v500_reading {
 	bool lines[IRQ_COUNT];
-	int temp, uv, ua, uah, capacity, health, status, limit_ua;
+	int temp, uv, ua, uah, capacity, health, status, limit_ua, usb_type;
 };
 
 struct v500_battery {
@@ -67,6 +67,19 @@ struct v500_battery {
 static DEFINE_SPINLOCK(budget_lock);
 static struct v500_battery *controller;
 static unsigned int budget_ma;
+static bool dedicated_port;
+
+void v500_usb_set_dedicated(bool present)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&budget_lock, flags);
+	WRITE_ONCE(dedicated_port, present);
+	if (controller && !controller->stopped)
+		mod_delayed_work(system_wq, &controller->work, 0);
+	spin_unlock_irqrestore(&budget_lock, flags);
+}
+EXPORT_SYMBOL_GPL(v500_usb_set_dedicated);
 
 int v500_usb_set_budget(unsigned int ma)
 {
@@ -331,9 +344,16 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 
 static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 {
-	unsigned int ma = READ_ONCE(budget_ma);
+	/* First dedicated-port profile uses the validated PM8921 500 mA
+	 * input step. Device enumeration is only needed for a data port.
+	 */
+	bool dedicated = READ_ONCE(dedicated_port);
+	unsigned int ma = dedicated ? 500 : READ_ONCE(budget_ma);
 	int ret;
 
+	r->usb_type = !r->lines[USB] ? POWER_SUPPLY_USB_TYPE_UNKNOWN :
+		      dedicated ? POWER_SUPPLY_USB_TYPE_DCP :
+		      ma >= 100 ? POWER_SUPPLY_USB_TYPE_SDP : POWER_SUPPLY_USB_TYPE_UNKNOWN;
 	/* A load-dependent VBAT_OV can clear as soon as USB is suspended.
 	 * Do not retry a hardware overvoltage every polling interval.
 	 * Clear the interlock only after observing physical VBUS removal.
@@ -361,7 +381,7 @@ static void sample_work(struct work_struct *work)
 	struct v500_reading r = {};
 	int ret;
 
-	if (READ_ONCE(budget_ma) < 100)
+	if (!READ_ONCE(dedicated_port) && READ_ONCE(budget_ma) < 100)
 		inhibit(b);
 	ret = sample_pack(b, &r);
 	if (!ret)
@@ -397,6 +417,10 @@ static enum power_supply_property battery_props[] = {
 };
 static enum power_supply_property usb_props[] = {
 	POWER_SUPPLY_PROP_ONLINE, POWER_SUPPLY_PROP_CURRENT_MAX, POWER_SUPPLY_PROP_VOLTAGE_MAX,
+	POWER_SUPPLY_PROP_USB_TYPE,
+};
+static enum power_supply_usb_type usb_types[] = {
+	POWER_SUPPLY_USB_TYPE_UNKNOWN, POWER_SUPPLY_USB_TYPE_SDP, POWER_SUPPLY_USB_TYPE_DCP,
 };
 
 static int get_property(struct power_supply *psy, enum power_supply_property prop,
@@ -422,6 +446,7 @@ static int get_property(struct power_supply *psy, enum power_supply_property pro
 	switch (prop) {
 	case POWER_SUPPLY_PROP_PRESENT: val->intval = r.lines[PRESENT]; break;
 	case POWER_SUPPLY_PROP_ONLINE: val->intval = r.lines[USB]; break;
+	case POWER_SUPPLY_PROP_USB_TYPE: val->intval = r.usb_type; break;
 	case POWER_SUPPLY_PROP_CURRENT_MAX: val->intval = r.limit_ua; break;
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX: val->intval = 5000000; break;
 	case POWER_SUPPLY_PROP_STATUS: val->intval = r.status; break;
@@ -444,6 +469,7 @@ static const struct power_supply_desc battery_desc = {
 };
 static const struct power_supply_desc usb_desc = {
 	.name = "usb", .type = POWER_SUPPLY_TYPE_USB, .properties = usb_props,
+	.usb_types = usb_types, .num_usb_types = ARRAY_SIZE(usb_types),
 	.num_properties = ARRAY_SIZE(usb_props), .get_property = get_property,
 };
 

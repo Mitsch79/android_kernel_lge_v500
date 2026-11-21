@@ -33,7 +33,7 @@ changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-a
          v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight
          v500-a320-vbif-timeout)
 if [[ $vbif_cancel_idle == 1 ]]; then changes+=(v500-a320-vbif-resume); fi
-changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc)
+changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc v500-usb-charger)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
@@ -55,6 +55,7 @@ install -m644 "$here/v500-boot-probe.h" "$source_dir/arch/arm/include/asm/"
 install -m644 "$here/extcon-pm8921-usb.c" "$source_dir/drivers/extcon/"
 install -m644 "$port/v500-battery.c" "$port/v500-battery-data.h" "$source_dir/drivers/power/supply/"
 install -m644 "$port/v500-battery.h" "$source_dir/include/linux/power/"
+install -m644 "$port/v500-usb-charger.h" "$source_dir/drivers/usb/chipidea/"
 cp "$here"/qcom-apq8064-lg-v500*.dts "$build_dir/board/"
 cp "$source_dir/arch/arm/boot/dts"/qcom-apq8064{,-v2.0}.dtsi "$build_dir/board/"
 patch --batch --fuzz=0 -d "$build_dir/board" -p1 < "$port/v500-board-6.1.patch"
@@ -66,7 +67,7 @@ if [[ -z $usb_charging ]]; then
 fi
 case $usb_charging in
     0) ;;
-    1) printf '\n&v500_battery { lge,enable-usb-charging; };\n' >> "$build_dir/board/$dts.dts" ;;
+    1) printf '\n&v500_battery { lge,enable-usb-charging; };\n&usb1 { lge,v500-detect-charger; };\n' >> "$build_dir/board/$dts.dts" ;;
     *) echo 'V500_USB_CHARGING must be 0 or 1' >&2; exit 2 ;;
 esac
 dtb="$build_dir/board/$dts.dtb"

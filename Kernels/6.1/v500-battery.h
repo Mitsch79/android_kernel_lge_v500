@@ -7,7 +7,9 @@
 
 #if IS_ENABLED(CONFIG_BATTERY_LG_V500)
 int v500_usb_set_budget(unsigned int ma);
+void v500_usb_set_dedicated(bool present);
 #else
 static inline int v500_usb_set_budget(unsigned int ma) { return -EOPNOTSUPP; }
+static inline void v500_usb_set_dedicated(bool present) {}
 #endif
 #endif

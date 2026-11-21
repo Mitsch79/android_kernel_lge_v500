@@ -1,0 +1,71 @@
+--- a/drivers/usb/chipidea/ci.h
++++ b/drivers/usb/chipidea/ci.h
+@@ -244,6 +244,8 @@
+ 
+ 	struct ci_hdrc_platform_data	*platdata;
+ 	int				vbus_active;
++	u32 v500_attach_generation;
++	bool v500_source_checked;
+ 	struct ulpi			*ulpi;
+ 	struct ulpi_ops 		ulpi_ops;
+ 	struct phy			*phy;
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -1675,6 +1675,34 @@
+ 	return ret >> 3;
+ }
+ 
++#include "v500-usb-charger.h"
++
++static void ci_v500_check_source(struct ci_hdrc *ci)
++{
++	u32 generation;
++	bool dedicated;
++
++	if (!of_property_read_bool(ci->dev->parent->of_node, "lge,v500-detect-charger"))
++		return;
++	spin_lock_irq(&ci->lock);
++	if (!ci->vbus_active || ci->v500_source_checked) {
++		spin_unlock_irq(&ci->lock);
++		return;
++	}
++	ci->v500_source_checked = true;
++	generation = ci->v500_attach_generation;
++	spin_unlock_irq(&ci->lock);
++
++	dedicated = v500_detect_dcp(ci);
++	spin_lock_irq(&ci->lock);
++	if (ci->vbus_active && ci->v500_attach_generation == generation) {
++		v500_usb_set_dedicated(dedicated);
++		dev_info(ci->dev, "V500 USB source: %s\n",
++			 dedicated ? "BC1.2 DCP" : "use gadget budget");
++	}
++	spin_unlock_irq(&ci->lock);
++}
++
+ /*
+  * ci_hdrc_gadget_connect: caller makes sure gadget driver is binded
+  */
+@@ -1689,6 +1717,8 @@
+ 		ret = hw_device_reset(ci);
+ 		if (ret)
+ 			dev_err(ci->dev, "Gadget reset failed: %d\n", ret);
++		else
++			ci_v500_check_source(ci);
+ 		spin_lock_irq(&ci->lock);
+ 		if (ci->driver) {
+ 			hw_device_state(ci, ci->ep0out->qh.dma);
+@@ -1720,8 +1750,12 @@
+ 
+ 	spin_lock_irqsave(&ci->lock, flags);
+ 	ci->vbus_active = is_active;
+-	if (!is_active && of_property_read_bool(ci->dev->parent->of_node, "lge,v500-usb-budget"))
++	if (!is_active && of_property_read_bool(ci->dev->parent->of_node, "lge,v500-usb-budget")) {
++		ci->v500_attach_generation++;
++		ci->v500_source_checked = false;
++		v500_usb_set_dedicated(false);
+ 		v500_usb_set_budget(0);
++	}
+ 	spin_unlock_irqrestore(&ci->lock, flags);
+ 
+ 	if (ci->usb_phy)
