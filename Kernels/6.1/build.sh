@@ -33,7 +33,7 @@ changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-a
          v500-arm-bpf-div64 v500-a3xx-devfreq v500-panel-resume v500-panel-backlight
          v500-a320-vbif-timeout)
 if [[ $vbif_cancel_idle == 1 ]]; then changes+=(v500-a320-vbif-resume); fi
-changes+=(v500-msm8960-usb-phy-reset-id)
+changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
@@ -53,10 +53,18 @@ done
 "${kernel_git[@]}" apply --reverse --check "$series_patch"
 install -m644 "$here/v500-boot-probe.h" "$source_dir/arch/arm/include/asm/"
 install -m644 "$here/extcon-pm8921-usb.c" "$source_dir/drivers/extcon/"
+install -m644 "$port/v500-battery.c" "$port/v500-battery-data.h" "$source_dir/drivers/power/supply/"
+install -m644 "$port/v500-battery.h" "$source_dir/include/linux/power/"
 cp "$here"/qcom-apq8064-lg-v500*.dts "$build_dir/board/"
 cp "$source_dir/arch/arm/boot/dts"/qcom-apq8064{,-v2.0}.dtsi "$build_dir/board/"
 patch --batch --fuzz=0 -d "$build_dir/board" -p1 < "$port/v500-board-6.1.patch"
 dts=qcom-apq8064-lg-v500-display
+cat "$port/v500-battery.dtsi" >> "$build_dir/board/$dts.dts"
+case ${V500_USB_CHARGING:-0} in
+    0) ;;
+    1) printf '\n&v500_battery { lge,enable-usb-charging; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_USB_CHARGING must be 0 or 1' >&2; exit 2 ;;
+esac
 dtb="$build_dir/board/$dts.dtb"
 cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ -I "$source_dir/arch/arm/boot/dts" -I "$source_dir/include" \
     "$build_dir/board/$dts.dts" -o "$build_dir/board/display.pp"
@@ -127,9 +135,10 @@ for symbol in ARCH_QCOM ARCH_MSM8960 CLKSRC_QCOM ARM_APPENDED_DTB ARM_ATAG_DTB_C
               ANDROID_BINDER_IPC ANDROID_BINDERFS ASHMEM EXT4_FS USB_CHIPIDEA_MSM EXTCON_PM8921_USB PSTORE_RAM \
               TOUCHSCREEN_ATMEL_MXT LEDS_LM3532 DRM_MSM_MDP4 DRM_MSM_DSI_28NM_8960_PHY DRM_PANEL_LG_LD083WU1 \
               BACKLIGHT_LED MSM_IOMMU DRM_VGEM BPF_JIT CPUSETS USB_CONFIGFS_F_FS USB_CONFIGFS_UEVENT \
-              USB_CONFIGFS_F_ACC DMABUF_HEAPS_SYSTEM; do
+              USB_CONFIGFS_F_ACC DMABUF_HEAPS_SYSTEM BATTERY_LG_V500 QCOM_PM8XXX_XOADC; do
     grep -Fx "CONFIG_$symbol=y" "$build_dir/.config" || { echo "Missing $symbol" >&2; exit 1; }
 done
+grep -Fx 'CONFIG_USB_GADGET_VBUS_DRAW=500' "$build_dir/.config"
 "${build[@]}" -j"${V500_JOBS:-12}" zImage
 if [[ -n $atomic_module ]]; then
     "${build[@]}" -j"${V500_JOBS:-12}" modules

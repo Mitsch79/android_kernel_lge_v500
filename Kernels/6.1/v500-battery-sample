@@ -1,0 +1,14 @@
+#!/bin/sh
+# Bounded acquisition on the read-only trace boot. The parent reboots to TWRP.
+p=/sys/class/power_supply
+for n in 1 2 3 4 5 6 7 8; do
+    sleep 2
+    line=
+    for field in present temp voltage_now current_now capacity charge_counter health status; do
+        value=$(cat "$p/battery/$field" 2>/dev/null) || value=unknown
+        line="$line $field=$value"
+    done
+    online=$(cat "$p/usb/online" 2>/dev/null) || online=unknown
+    limit=$(cat "$p/usb/current_max" 2>/dev/null) || limit=unknown
+    printf '<6>v500-battery-sample:%s usb=%s limit_ua=%s\n' "$line" "$online" "$limit" > /dev/kmsg
+done

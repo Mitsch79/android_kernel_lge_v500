@@ -1,0 +1,82 @@
+--- a/drivers/iio/adc/qcom-pm8xxx-xoadc.c
++++ b/drivers/iio/adc/qcom-pm8xxx-xoadc.c
+@@ -406,4 +406,5 @@
+ 	const struct xoadc_variant *variant;
+ 	struct regulator *vref;
++	bool awifi;
+ 	unsigned int nchans;
+ 	struct pm8xxx_chan_info *chans;
+@@ -499,21 +500,31 @@
+ 		goto unlock;
+ 
+-	ret = regmap_write(adc->map, ADC_ARB_USRP_ANA_PARAM,
+-			   ADC_ARB_USRP_ANA_PARAM_DIS);
+-	if (ret)
+-		goto unlock;
+-
+-	/* Decimation factor */
+-	ret = regmap_write(adc->map, ADC_ARB_USRP_DIG_PARAM,
+-			   ADC_ARB_USRP_DIG_PARAM_SEL_SHIFT0 |
+-			   ADC_ARB_USRP_DIG_PARAM_SEL_SHIFT1 |
+-			   ch->decimation << ADC_DIG_PARAM_DEC_SHIFT);
+-	if (ret)
+-		goto unlock;
+-
+-	ret = regmap_write(adc->map, ADC_ARB_USRP_ANA_PARAM,
+-			   ADC_ARB_USRP_ANA_PARAM_EN);
+-	if (ret)
+-		goto unlock;
++	if (adc->awifi) {
++		/* LG's PM8921 XOADC uses 0xa0 in both converters. */
++		ret = regmap_write(adc->map, ADC_ARB_USRP_DIG_PARAM, 0xa0);
++		if (ret)
++			goto unlock;
++		ret = regmap_write(adc->map, ADC_ARB_USRP_ANA_PARAM, 0xa0);
++		if (ret)
++			goto unlock;
++	} else {
++		ret = regmap_write(adc->map, ADC_ARB_USRP_ANA_PARAM,
++				   ADC_ARB_USRP_ANA_PARAM_DIS);
++		if (ret)
++			goto unlock;
++
++		/* Decimation factor */
++		ret = regmap_write(adc->map, ADC_ARB_USRP_DIG_PARAM,
++				   ADC_ARB_USRP_DIG_PARAM_SEL_SHIFT0 |
++				   ADC_ARB_USRP_DIG_PARAM_SEL_SHIFT1 |
++				   ch->decimation << ADC_DIG_PARAM_DEC_SHIFT);
++		if (ret)
++			goto unlock;
++
++		ret = regmap_write(adc->map, ADC_ARB_USRP_ANA_PARAM,
++				   ADC_ARB_USRP_ANA_PARAM_EN);
++		if (ret)
++			goto unlock;
++	}
+ 
+ 	/* Enable the arbiter, the Qualcomm code does it twice like this */
+@@ -545,4 +556,11 @@
+ 	}
+ 
++	if (adc->awifi) {
++		ret = regmap_read_poll_timeout(adc->map, ADC_ARB_USRP_CNTRL, val,
++				val == (ADC_ARB_USRP_CNTRL_EN_ARB | ADC_ARB_USRP_CNTRL_EOC),
++				100, 100000);
++		if (ret)
++			goto unlock;
++	}
+ 	ret = regmap_read(adc->map, ADC_ARB_USRP_DATA0, &val);
+ 	if (ret)
+@@ -610,5 +628,5 @@
+ 	}
+ 	if (read_1250v <= read_0625v) {
+-		dev_err(adc->dev, "read same ADC code for 1.25V and 0.625V\n");
++		dev_err(adc->dev, "invalid ADC references 1.25V=%u 0.625V=%u\n", read_1250v, read_0625v);
+ 		return -ENODEV;
+ 	}
+@@ -900,4 +918,5 @@
+ 	adc->dev = dev;
+ 	adc->variant = variant;
++	adc->awifi = device_property_read_bool(dev, "lge,awifi-xoadc");
+ 	init_completion(&adc->complete);
+ 	mutex_init(&adc->lock);

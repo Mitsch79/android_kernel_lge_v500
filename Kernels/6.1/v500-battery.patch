@@ -1,0 +1,138 @@
+--- a/drivers/iio/adc/qcom-pm8xxx-xoadc.c
++++ b/drivers/iio/adc/qcom-pm8xxx-xoadc.c
+@@ -537,7 +537,7 @@
+ 
+ 	/* Next the interrupt occurs */
+ 	ret = wait_for_completion_timeout(&adc->complete,
+-					  VADC_CONV_TIME_MAX_US);
++					  msecs_to_jiffies(100));
+ 	if (!ret) {
+ 		dev_err(adc->dev, "conversion timed out\n");
+ 		ret = -ETIMEDOUT;
+@@ -608,7 +608,7 @@
+ 		dev_err(adc->dev, "could not read 0.625V reference channel\n");
+ 		return -ENODEV;
+ 	}
+-	if (read_1250v == read_0625v) {
++	if (read_1250v <= read_0625v) {
+ 		dev_err(adc->dev, "read same ADC code for 1.25V and 0.625V\n");
+ 		return -ENODEV;
+ 	}
+@@ -635,6 +635,9 @@
+ 		dev_err(adc->dev, "could not read MUXOFF reference channel\n");
+ 		return -ENODEV;
+ 	}
++	if (read_nomux_rsv5 <= read_nomux_rsv4)
++		return -ERANGE;
++
+ 	adc->graph[VADC_CALIB_RATIOMETRIC].dy =
+ 		read_nomux_rsv5 - read_nomux_rsv4;
+ 	adc->graph[VADC_CALIB_RATIOMETRIC].gnd = read_nomux_rsv4;
+@@ -667,7 +670,8 @@
+ 		if (ret)
+ 			return ret;
+ 
+-		ret = qcom_vadc_scale(ch->hwchan->scale_fn_type,
++		ret = qcom_vadc_scale(chan->type == IIO_VOLTAGE ? SCALE_DEFAULT :
++				      ch->hwchan->scale_fn_type,
+ 				      &adc->graph[ch->calibration],
+ 				      &ch->hwchan->prescale,
+ 				      (ch->calibration == VADC_CALIB_ABSOLUTE),
+@@ -773,6 +777,7 @@
+ 	}
+ 	ch->name = name;
+ 	ch->hwchan = hwchan;
++	ch->amux_ip_rsv = hwchan->amux_ip_rsv;
+ 	/* Everyone seems to use absolute calibration except in special cases */
+ 	ch->calibration = VADC_CALIB_ABSOLUTE;
+ 	/* Everyone seems to use default ("type 2") decimation */
+@@ -788,6 +793,7 @@
+ 			dev_err(dev, "%s invalid RSV value %d\n", name, rsv);
+ 			return -EINVAL;
+ 		}
++		ch->amux_ip_rsv = rsv;
+ 	}
+ 
+ 	/* Optional decimation, if omitted we use the default */
+@@ -806,6 +812,9 @@
+ 	iio_chan->address = hwchan->amux_channel;
+ 	iio_chan->datasheet_name = hwchan->datasheet_name;
+ 	iio_chan->type = hwchan->type;
++	if (fwnode_property_present(fwnode, "lge,thermistor-millivolts") &&
++	    ch->calibration == VADC_CALIB_RATIOMETRIC && hwchan->amux_channel == 8)
++		iio_chan->type = IIO_VOLTAGE;
+ 	/* All channels are raw or processed */
+ 	iio_chan->info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
+ 		BIT(IIO_CHAN_INFO_PROCESSED);
+@@ -937,20 +946,18 @@
+ 	indio_dev->channels = adc->iio_chans;
+ 	indio_dev->num_channels = adc->nchans;
+ 
++	ret = pm8xxx_calibrate_device(adc);
++	if (ret)
++		goto out_disable_vref;
++
+ 	ret = iio_device_register(indio_dev);
+ 	if (ret)
+ 		goto out_disable_vref;
+ 
+-	ret = pm8xxx_calibrate_device(adc);
+-	if (ret)
+-		goto out_unreg_device;
+-
+ 	dev_info(dev, "%s XOADC driver enabled\n", variant->name);
+ 
+ 	return 0;
+ 
+-out_unreg_device:
+-	iio_device_unregister(indio_dev);
+ out_disable_vref:
+ 	regulator_disable(adc->vref);
+ 
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -918,4 +918,8 @@
+ 	  device is off or suspended, the functionality of this driver is
+ 	  limited to reporting capacity only.
+ 
++config BATTERY_LG_V500
++	bool "LG V500 PM8921 USB charger and fuel gauge"
++	depends on MFD_PM8XXX && QCOM_PM8XXX_XOADC=y
++
+ endif # POWER_SUPPLY
+--- a/drivers/power/supply/Makefile
++++ b/drivers/power/supply/Makefile
+@@ -110,3 +110,4 @@
+ obj-$(CONFIG_BATTERY_SURFACE)	+= surface_battery.o
+ obj-$(CONFIG_CHARGER_SURFACE)	+= surface_charger.o
+ obj-$(CONFIG_BATTERY_UG3105)	+= ug3105_battery.o
++obj-$(CONFIG_BATTERY_LG_V500)	+= v500-battery.o
+--- a/drivers/usb/chipidea/udc.c
++++ b/drivers/usb/chipidea/udc.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <linux/delay.h>
++#include <linux/of.h>
++#include <linux/power/v500-battery.h>
+ #include <linux/device.h>
+ #include <linux/dmapool.h>
+ #include <linux/err.h>
+@@ -1718,6 +1720,8 @@
+ 
+ 	spin_lock_irqsave(&ci->lock, flags);
+ 	ci->vbus_active = is_active;
++	if (!is_active && of_property_read_bool(ci->dev->parent->of_node, "lge,v500-usb-budget"))
++		v500_usb_set_budget(0);
+ 	spin_unlock_irqrestore(&ci->lock, flags);
+ 
+ 	if (ci->usb_phy)
+@@ -1770,6 +1774,8 @@
+ {
+ 	struct ci_hdrc *ci = container_of(_gadget, struct ci_hdrc, gadget);
+ 
++	if (of_property_read_bool(ci->dev->parent->of_node, "lge,v500-usb-budget"))
++		return v500_usb_set_budget(ma);
+ 	if (ci->usb_phy)
+ 		return usb_phy_set_power(ci->usb_phy, ma);
+ 	return -ENOTSUPP;

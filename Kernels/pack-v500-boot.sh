@@ -72,6 +72,10 @@ if [[ -n ${atomic_module:-} ]]; then
     printf 'file /bin/test_bpf.ko %s 0444 0 0\n' "$atomic_module" >> "$build_dir/initramfs.list"
     printf 'file /bin/test-atomic-add %s/test-atomic-add 0755 0 0\n' "$port" >> "$build_dir/initramfs.list"
 fi
+if [[ "$probe" == trace && -f ${port:-/nonexistent}/v500-battery-sample ]]; then
+    qemu-arm "$busybox" sh -n "$port/v500-battery-sample"
+    printf 'file /bin/v500-battery-sample %s/v500-battery-sample 0755 0 0\n' "$port" >> "$build_dir/initramfs.list"
+fi
 if [[ "$dts" == *-stable ]]; then
     qemu-arm "$busybox" sh -n "$here/v500-load"
     printf 'file /bin/v500-load %s/v500-load 0755 0 0\n' "$here" >> "$build_dir/initramfs.list"

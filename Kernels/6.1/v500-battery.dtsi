@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0-only
+&xoadc {
+	lge,awifi-xoadc;
+};
+
+&batt_therm {
+	qcom,ratiometric = <2>; /* AWIFI uses BMS_CSP */
+	lge,thermistor-millivolts;
+};
+
+&usb1 {
+	lge,v500-usb-budget;
+};
+
+&pmicintc {
+	v500_battery: battery-controller {
+		compatible = "lge,v500-pm8921-battery";
+		clocks = <&rpmcc RPM_XO_D0>;
+		io-channels = <&xoadc 0 8>, <&xoadc 0 1>, <&xoadc 0 12>, <&xoadc 0 13>;
+		io-channel-names = "thermistor", "vbat", "ref625", "ref1250";
+		interrupt-parent = <&pmicintc>;
+		interrupts = <15 IRQ_TYPE_EDGE_BOTH>, <13 IRQ_TYPE_EDGE_BOTH>,
+			     <26 IRQ_TYPE_EDGE_BOTH>, <29 IRQ_TYPE_EDGE_BOTH>,
+			     <10 IRQ_TYPE_EDGE_BOTH>, <20 IRQ_TYPE_EDGE_RISING>,
+			     <17 IRQ_TYPE_EDGE_BOTH>, <16 IRQ_TYPE_EDGE_BOTH>,
+			     <21 IRQ_TYPE_EDGE_RISING>, <22 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "usb", "present", "temp-ok", "charger-hot",
+				  "overvoltage", "failed", "fast", "trickle", "done", "atc-failed";
+	};
+};
