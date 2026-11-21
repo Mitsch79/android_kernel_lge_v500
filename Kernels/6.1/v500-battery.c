@@ -34,15 +34,16 @@
 #define PACK_UAH 4600000
 #define POLL_MS 2000
 
-enum { USB, PRESENT, TEMP_OK, CHARGER_HOT, OVERVOLTAGE, FAILED,
-       FAST, TRICKLE, DONE, ATC_FAILED, IRQ_COUNT };
+enum { USB, PRESENT, TEMP_OK, CHARGER_HOT, VBAT_OV, FAILED,
+       FAST, TRICKLE, DONE, ATC_FAILED, VREG_OV, IRQ_COUNT };
 static const char * const irq_names[] = {
-	"usb", "present", "temp-ok", "charger-hot", "overvoltage", "failed",
-	"fast", "trickle", "done", "atc-failed"
+	"usb", "present", "temp-ok", "charger-hot", "vbat-ov", "failed",
+	"fast", "trickle", "done", "atc-failed", "vreg-ov"
 };
 
 struct v500_reading {
 	bool lines[IRQ_COUNT];
+	bool vreg_edge;
 	int temp, uv, ua, uah, capacity, health, status, limit_ua, usb_type;
 };
 
@@ -54,6 +55,7 @@ struct v500_battery {
 	struct delayed_work work;
 	struct mutex lock;
 	struct v500_reading sample;
+	atomic_t vreg_pending;
 	unsigned long stamp;
 	int irq[IRQ_COUNT], gain_codes, ref_low, ref_high, error;
 	int saved_percent, initial_offset_uah, ocv_base_uah;
@@ -377,6 +379,22 @@ static int read_gauge(struct v500_battery *b, struct v500_reading *r)
 	return 0;
 }
 
+/* PM8921 Table 5-52: VBAT_OV tracks the programmed recharge threshold.
+ * VREG_OV is the independent regulator overshoot interrupt.
+ */
+static int pack_health(const struct v500_reading *r)
+{
+	if (r->lines[VREG_OV] || r->vreg_edge || r->uv >= 4320000)
+		return POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+	if (r->lines[CHARGER_HOT] || r->temp >= 420)
+		return POWER_SUPPLY_HEALTH_OVERHEAT;
+	if (r->temp < 100)
+		return POWER_SUPPLY_HEALTH_COLD;
+	if (!r->lines[TEMP_OK] || r->lines[FAILED] || r->lines[ATC_FAILED])
+		return POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
+	return POWER_SUPPLY_HEALTH_GOOD;
+}
+
 static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 {
 	int i, ret;
@@ -399,16 +417,8 @@ static int sample_pack(struct v500_battery *b, struct v500_reading *r)
 	ret = read_gauge(b, r);
 	if (ret)
 		return ret;
-	if (r->lines[OVERVOLTAGE] || r->uv > 4320000)
-		r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
-	else if (r->lines[CHARGER_HOT] || r->temp >= 420)
-		r->health = POWER_SUPPLY_HEALTH_OVERHEAT;
-	else if (r->temp < 100)
-		r->health = POWER_SUPPLY_HEALTH_COLD;
-	else if (!r->lines[TEMP_OK] || r->lines[FAILED] || r->lines[ATC_FAILED])
-		r->health = POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
-	else
-		r->health = POWER_SUPPLY_HEALTH_GOOD;
+	r->vreg_edge = atomic_xchg(&b->vreg_pending, 0);
+	r->health = pack_health(r);
 	return 0;
 }
 
@@ -429,15 +439,16 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	r->usb_type = r->lines[USB] ? source : POWER_SUPPLY_USB_TYPE_UNKNOWN;
 	if (r->lines[USB] && r->usb_type == POWER_SUPPLY_USB_TYPE_UNKNOWN && ma >= 100)
 		r->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
-	/* A load-dependent VBAT_OV can clear as soon as USB is suspended.
+	/* Regulator overshoot can clear as soon as USB is suspended.
 	 * Do not retry a hardware overvoltage every polling interval.
 	 * Clear the interlock only after observing physical VBUS removal.
 	 */
 	if (!r->lines[USB])
 		b->voltage_fault = false;
 	else if (!b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
-		dev_warn(b->dev, "USB charge inhibited: VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA\n",
-			 r->lines[OVERVOLTAGE], r->uv, r->ua, r->temp, b->programmed_ma);
+		dev_warn(b->dev, "USB charge inhibited: VREG_OV=%d edge=%d VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA\n",
+			 r->lines[VREG_OV], r->vreg_edge, r->lines[VBAT_OV],
+			 r->uv, r->ua, r->temp, b->programmed_ma);
 		b->voltage_fault = true;
 	}
 	if (b->active && b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_GOOD)
@@ -477,6 +488,10 @@ static void sample_work(struct work_struct *work)
 	} else {
 		r.status = POWER_SUPPLY_STATUS_NOT_CHARGING;
 	}
+	if (!ret && b->test_cdp_1500)
+		dev_info(b->dev, "CDP test sample: VBAT_OV=%d VREG_OV=%d edge=%d cell_uV=%d temp_deciC=%d net_uA=%d input_limit_uA=%d\n",
+			 r.lines[VBAT_OV], r.lines[VREG_OV], r.vreg_edge,
+			 r.uv, r.temp, r.ua, r.limit_ua);
 	mutex_lock(&b->lock);
 	b->error = ret;
 	b->sample = r;
@@ -579,6 +594,19 @@ static int resume_charger(struct device *dev)
 	return 0;
 }
 
+static irqreturn_t v500_vreg_ov_irq(int irq, void *data)
+{
+	struct v500_battery *b = data;
+	unsigned long flags;
+
+	atomic_set(&b->vreg_pending, 1);
+	spin_lock_irqsave(&budget_lock, flags);
+	if (controller == b && !b->stopped)
+		mod_delayed_work(system_wq, &b->work, 0);
+	spin_unlock_irqrestore(&budget_lock, flags);
+	return IRQ_HANDLED;
+}
+
 static int v500_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -645,6 +673,10 @@ static int v500_probe(struct platform_device *pdev)
 	if (IS_ERR(b->usb))
 		return PTR_ERR(b->usb);
 	platform_set_drvdata(pdev, b);
+	ret = devm_request_threaded_irq(dev, b->irq[VREG_OV], NULL, v500_vreg_ov_irq,
+					IRQF_ONESHOT, "v500-vreg-ov", b);
+	if (ret)
+		return dev_err_probe(dev, ret, "VREG_OV interrupt\n");
 	spin_lock_irqsave(&budget_lock, flags);
 	controller = b;
 	mod_delayed_work(system_wq, &b->work, 0);
