@@ -70,6 +70,11 @@ case $usb_charging in
     1) printf '\n&v500_battery { lge,enable-usb-charging; };\n&usb1 { lge,v500-detect-charger; };\n' >> "$build_dir/board/$dts.dts" ;;
     *) echo 'V500_USB_CHARGING must be 0 or 1' >&2; exit 2 ;;
 esac
+case ${V500_TEST_CDP_1500:-0} in
+    0) ;;
+    1) printf '\n&v500_battery { lge,test-cdp-1500ma; };\n' >> "$build_dir/board/$dts.dts" ;;
+    *) echo 'V500_TEST_CDP_1500 must be 0 or 1' >&2; exit 2 ;;
+esac
 dtb="$build_dir/board/$dts.dtb"
 cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ -I "$source_dir/arch/arm/boot/dts" -I "$source_dir/include" \
     "$build_dir/board/$dts.dts" -o "$build_dir/board/display.pp"

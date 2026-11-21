@@ -60,7 +60,7 @@ struct v500_battery {
 	int usb_trim_base, programmed_ma;
 	bool usb_trim_table1;
 	u16 last_ocv;
-	bool active, stopped, voltage_fault;
+	bool active, stopped, voltage_fault, test_cdp_1500;
 };
 
 /* ChipIdea can call vbus_draw from atomic context. Serialize registration
@@ -425,7 +425,7 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	if (source == POWER_SUPPLY_USB_TYPE_DCP)
 		ma = 500;
 	else if (source == POWER_SUPPLY_USB_TYPE_CDP && ma >= 500)
-		ma = 1500;
+		ma = b->test_cdp_1500 ? 1500 : 500;
 	r->usb_type = r->lines[USB] ? source : POWER_SUPPLY_USB_TYPE_UNKNOWN;
 	if (r->lines[USB] && r->usb_type == POWER_SUPPLY_USB_TYPE_UNKNOWN && ma >= 100)
 		r->usb_type = POWER_SUPPLY_USB_TYPE_SDP;
@@ -435,8 +435,11 @@ static int apply_budget(struct v500_battery *b, struct v500_reading *r)
 	 */
 	if (!r->lines[USB])
 		b->voltage_fault = false;
-	else if (r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE)
+	else if (!b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_OVERVOLTAGE) {
+		dev_warn(b->dev, "USB charge inhibited: VBAT_OV=%d cell=%d uV net=%d uA temp=%d deciC input_limit=%d mA\n",
+			 r->lines[OVERVOLTAGE], r->uv, r->ua, r->temp, b->programmed_ma);
 		b->voltage_fault = true;
+	}
 	if (b->active && b->voltage_fault && r->health == POWER_SUPPLY_HEALTH_GOOD)
 		r->health = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 	if (!b->active || ma < 100 || !r->lines[USB] ||
@@ -596,6 +599,7 @@ static int v500_probe(struct platform_device *pdev)
 	if (IS_ERR(clk))
 		return dev_err_probe(dev, PTR_ERR(clk), "charger TCXO\n");
 	b->active = of_property_read_bool(dev->of_node, "lge,enable-usb-charging");
+	b->test_cdp_1500 = of_property_read_bool(dev->of_node, "lge,test-cdp-1500ma");
 	ret = start_pmic(b);
 	if (ret)
 		return dev_err_probe(dev, ret, "charger initialization\n");
