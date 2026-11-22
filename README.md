@@ -4,6 +4,21 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 ## Building a test boot image
 
+### Measuring the Krait CPU clocks
+
+For a comparable workload on the LG 3.4 kernel and the 6.1 port, cross-compile `Kernels/6.1/v500-core-reference.c` as a static ARMv7 Linux executable with `-O2 -static`. Use the same binary on both systems. It runs one warm-up and three measured batches with one worker per CPU. Each worker verifies affinity and the integer result and reports elapsed and thread CPU time. When the kernel grants access to the ARM PMU, divide cycles by running nanoseconds and multiply by 1,000 to obtain MHz. Use intervals with equal positive running and enabled times. When only CPUFreq is available, the before/after values are policy readings in kHz.
+
+The optional `v500-core-clocks.c` module exposes a read-only snapshot at `/sys/kernel/debug/v500_core_clocks` on the V500. It reads the primary and secondary mux selections and four HFPLL registers for each CPU and the shared L2 clock. To reproduce the diagnostic on the 6.1 config with `KRAIT_L2_ACCESSORS` disabled, build an external module against the same kernel build and exported symbols. Place the source and the matching kernel's `arch/arm/common/krait-l2-accessors.c` in an empty module directory with this Kbuild file.
+
+```makefile
+obj-m := core-meter.o
+core-meter-y := v500-core-clocks.o krait-l2-accessors.o
+```
+
+Load the module in a temporary diagnostic boot with debugfs mounted. Read the file before, during and after the pinned workload. The low two mux bits select the primary source. Value 1 selects the direct HFPLL. With value 0 the next two bits select the secondary source. Read the PLL mode together with the L multiplier to identify whether that PLL is active. The reader leaves the clock and voltage settings unchanged.
+
+### Android test profile
+
 The Android test configuration enables high-resolution timers on the Qualcomm one-shot clock event device. The kernel tick rate remains 100 Hz.
 
 `V500_M6_VBIF_CANCEL_IDLE=1` builds an experimental V500 Adreno driver in a separate worktree. An incoming runtime power reference can interrupt the wait for bus clients during autosuspend. The driver still requires all six acknowledgements before powering down.
