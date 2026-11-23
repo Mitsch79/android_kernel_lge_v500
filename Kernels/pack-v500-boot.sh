@@ -95,6 +95,11 @@ if [[ "$probe" == trace && ${cpu_scaling:-0} == 1 ]]; then
         "$port/v500-core-reference.c" -o "$build_dir/core-reference"
     qemu-arm "$busybox" sh -n "$port/v500-cpufreq-test"
     printf 'file /bin/core-reference %s/core-reference 0755 0 0\nfile /bin/v500-cpufreq-test %s/v500-cpufreq-test 0755 0 0\n' "$build_dir" "$port" >> "$build_dir/initramfs.list"
+    if [[ ${endurance:-0} == 1 ]]; then
+        "${compiler[@]}" "${userspace_cppflags[@]}" -static -O2 -Wall -Wextra -Werror \
+            "$port/v500-memory-check.c" -o "$build_dir/v500-memory-check"
+        printf 'file /bin/v500-memory-check %s/v500-memory-check 0755 0 0\n' "$build_dir" >> "$build_dir/initramfs.list"
+    fi
 fi
 if [[ "$dts" == *-stable ]]; then
     qemu-arm "$busybox" sh -n "$here/v500-load"

@@ -17,3 +17,47 @@ for cpu in 0 1 2 3; do
     log "idle cpu=$cpu kHz=$(cat "$base/policy$cpu/scaling_cur_freq")"
 done
 log "result=$rc"
+[ "$rc" -eq 0 ] || exit 1
+seconds() { read -r up rest < /proc/uptime; echo "${up%%.*}"; }
+start=$(seconds)
+batch=0
+duration=24
+limit=75000
+if [ -x /bin/v500-memory-check ]; then
+    duration=150
+    # Permit the stock 75 C passive trip to operate, while retaining an
+    # independent stop well below the 110 C critical trip.
+    limit=85000
+    for cpu in 0 1 2 3; do
+        test -r "/sys/class/thermal/cooling_device$cpu/cur_state" || { log "cooling unavailable"; exit 1; }
+    done
+fi
+while [ $(( $(seconds) - start )) -lt "$duration" ]; do
+    sensors=0
+    for z in /sys/class/thermal/thermal_zone*; do
+        case "$(cat "$z/type")" in cpu*-thermal)
+            t=$(cat "$z/temp") || exit 1
+            log "batch=$batch zone=$(cat "$z/type") mC=$t"
+            [ "$t" -lt "$limit" ] || { log "thermal-stop"; exit 1; }
+            sensors=$((sensors+1))
+        esac
+    done
+    [ "$sensors" -eq 4 ] || { log "missing CPU thermal zones: $sensors"; exit 1; }
+    if [ -x /bin/v500-memory-check ]; then
+        bt=$(cat /sys/class/power_supply/battery/temp) || exit 1
+        [ "$bt" -lt 420 ] || { log "battery thermal-stop temp=$bt"; exit 1; }
+        log "battery=$bt cooling=$(cat /sys/class/thermal/cooling_device*/cur_state | tr '\n' ',')"
+        /bin/v500-memory-check || { log "memory verification failed batch=$batch"; exit 1; }
+    fi
+    /bin/core-reference > /tmp/cpu-samples || { log "computation failed"; exit 1; }
+    # Keep the persistent kernel ring small and preserve a PMU sample per core.
+    if [ "$batch" -eq 0 ]; then
+        while IFS= read -r line; do case "$line" in *pass=3*) log "loaded $line";; esac; done < /tmp/cpu-samples
+    fi
+    batch=$((batch+1))
+done
+sleep 2
+for cpu in 0 1 2 3; do
+    log "recovered cpu=$cpu kHz=$(cat "$base/policy$cpu/scaling_cur_freq")"
+done
+log "sustained batches=$batch seconds=$(( $(seconds) - start - 2 ))"

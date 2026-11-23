@@ -9,6 +9,12 @@ build_dir="$work/build-6.1.177-v500"
 probe=${1:-lineage21}
 cpu_supply_probe=${V500_CPU_SUPPLY_PROBE:-0}
 cpu_scaling=${V500_CPU_SCALING:-0}
+endurance=${V500_CPU_ENDURANCE:-0}
+case "$endurance" in
+    0) ;;
+    1) [[ $cpu_scaling == 1 && $probe == trace ]] ;;
+    *) exit 2 ;;
+esac
 case "$cpu_scaling" in
     0) ;;
     1) cpu_supply_probe=1; source_dir+=-cpufreq; build_dir+=-cpufreq ;;
@@ -147,6 +153,7 @@ done
 fdtput -tx "$dtb" /memory@80200000 linux,usable-memory "${banks[@]}"
 if [[ $probe == trace ]]; then
     recovery_seconds=65
+    if [[ $endurance == 1 ]]; then recovery_seconds=230; fi
     bootargs="rdinit=/init v500_trace=1 clk_ignore_unused initcall_debug loglevel=7 console=ttyMSM0,115200n8 panic=8"
     fdtput -ts "$dtb" /soc/mdp@5100000 status disabled
     fdtput -ts "$dtb" /soc/gpu@4300000 status disabled

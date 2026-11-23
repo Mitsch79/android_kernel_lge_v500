@@ -6,7 +6,7 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 ### Measuring the Krait CPU clocks
 
-For a V500 with the measured APQ8064 speed bin 1 and PVS 5, set
+For a V500 with the measured APQ8064 speed bin 1 and PVS 3, 4 or 5, set
 `V500_CPU_SCALING=1` and `V500_EXPORT_DIR` to a separate directory.
 The `trace` profile runs a four-core pinned workload from RAM and records
 the scaling policies, PMU cycles, verified computation results and post-load
@@ -14,7 +14,17 @@ frequencies in the kernel log. The `lineage21` profile enables the same
 per-core CPUFreq policies in Android. Both profiles use LG's 14 operating
 points from 384 to 1728 MHz and the ondemand governor. The shared L2 clock
 stays at 1188 MHz with peak MEM/DIG and EBI votes. Battery endurance and
-sustained thermal throttling have yet to be characterized.
+sustained thermal behavior depend on the workload and device.
+
+The short RAM test repeats four-core calculations for up to 24 seconds
+and stops at the first sampled CPU temperature of 75 °C. To include a
+150-second mixed workload, also set `V500_CPU_ENDURANCE=1` for the
+`trace` profile. Each round writes and verifies a private 16 MiB buffer on
+each core and runs the four-core integer calculation. The kernel log records
+CPU temperatures, battery temperature and thermal cooling-device states.
+The test allows the 75 °C passive trip to act and stops at a sampled 85 °C
+CPU temperature, 42 °C battery temperature or computation failure. Its
+recovery watchdog is set to 230 seconds.
 
 For a comparable workload on the LG 3.4 kernel and the 6.1 port, cross-compile `Kernels/6.1/v500-core-reference.c` as a static ARMv7 Linux executable with `-O2 -static`. Use the same binary on both systems. It runs one warm-up and three measured batches with one worker per CPU. Each worker verifies affinity and the integer result and reports elapsed and thread CPU time. When the kernel grants access to the ARM PMU, divide cycles by running nanoseconds and multiply by 1,000 to obtain MHz. Use intervals with equal positive running and enabled times. When only CPUFreq is available, the before/after values are policy readings in kHz.
 
