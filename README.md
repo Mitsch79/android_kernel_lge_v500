@@ -6,15 +6,21 @@ This branch carries the V500 board sources and patch series for Google's `androi
 
 ### Measuring the Krait CPU clocks
 
-For a V500 with the measured APQ8064 speed bin 1 and PVS 3, 4 or 5, set
+For the optional V500 Krait scaling profile, set
 `V500_CPU_SCALING=1` and `V500_EXPORT_DIR` to a separate directory.
 The `trace` profile runs a four-core pinned workload from RAM and records
 the scaling policies, PMU cycles, verified computation results and post-load
 frequencies in the kernel log. The `lineage21` profile enables the same
-per-core CPUFreq policies in Android. Both profiles use LG's 14 operating
-points from 384 to 1728 MHz and the ondemand governor. The shared L2 clock
-stays at 1188 MHz with peak MEM/DIG and EBI votes. Battery endurance and
-sustained thermal behavior depend on the workload and device.
+per-core CPUFreq policies in Android. The normal LG OPP tables cover all
+25 speed/PVS combinations in the pinned 14.1 driver. The CPUFreq ceiling
+for bins 0/1/2/14 is 1512/1728/1674/1512 MHz. The two higher bin-2 OPPs
+are present with disabled status. The three MIDRs listed in LG's voltage
+erratum use the 1150 mV base floor before the per-table boost. L2 runs at
+1188 MHz for bin 1 and 1134 MHz for bins 0, 2 and 14. Factory-cable boot
+profiles are outside the normal CPUFreq table. To compare a built DTB
+against LG, run `python3 Kernels/6.1/check-v500-cpu-opps.py LG_KERNEL_REPO DTB`.
+Hardware measurements cover bin 1, PVS 3/4/5. Sustained load has exposed
+SAW voltage acknowledgement timeouts on each of the four test tablets.
 
 The short RAM test repeats four-core calculations for up to 24 seconds
 and stops at the first sampled CPU temperature of 75 °C. To include a

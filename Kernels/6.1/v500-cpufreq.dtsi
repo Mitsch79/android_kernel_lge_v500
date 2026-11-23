@@ -113,6 +113,8 @@
 / {
 	v500_krait: krait-clock-controller {
 		compatible = "lg,v500-krait-cc", "qcom,krait-cc-v1";
+		nvmem-cells = <&v500_cpu_bin>;
+		nvmem-cell-names = "speedbin";
 		#clock-cells = <1>;
 		mem-supply = <&pm8921_l24>;
 		dig-supply = <&pm8921_s3>;

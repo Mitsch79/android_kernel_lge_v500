@@ -1,0 +1,59 @@
+--- a/drivers/cpufreq/qcom-cpufreq-nvmem.c
++++ b/drivers/cpufreq/qcom-cpufreq-nvmem.c
+@@ -28,6 +28,10 @@
+ #include <linux/slab.h>
+ #include <linux/soc/qcom/smem.h>
+ 
++#ifdef CONFIG_ARM
++#include <asm/cputype.h>
++#endif
++
+ #define MSM_ID_SMEM	137
+ 
+ enum _msm_id {
+@@ -238,6 +242,18 @@
+ 		goto len_error;
+ 	}
+ 
++#ifdef CONFIG_ARM
++	/* LG applies a minimum core voltage before adding the PVS boost. */
++	if (of_machine_is_compatible("lg,v500")) {
++		switch (read_cpuid_id()) {
++		case 0x511f04d0:
++		case 0x511f04d1:
++		case 0x510f06f0:
++			pvs_ver = 1;
++			break;
++		}
++	}
++#endif
+ 	snprintf(*pvs_name, sizeof("speedXX-pvsXX-vXX"), "speed%d-pvs%d-v%d",
+ 		 speed, pvs, pvs_ver);
+ 
+--- a/drivers/clk/qcom/krait-cc.c
++++ b/drivers/clk/qcom/krait-cc.c
+@@ -307,9 +307,13 @@
+ 	struct clk *l2_pri_mux_clk;
+ 
+ 	bool v500 = of_device_is_compatible(dev->of_node, "lg,v500-krait-cc");
++	unsigned long l2_rate;
+ 	int ret;
+ 
+ 	if (v500) {
++		ret = v500_l2_rate(dev, &l2_rate);
++		if (ret)
++			return dev_err_probe(dev, ret, "Krait speed bin\n");
+ 		ret = v500_prepare_krait(dev);
+ 		if (ret)
+ 			return dev_err_probe(dev, ret, "Krait supplies and clock parents\n");
+@@ -396,8 +400,8 @@
+ 	}
+ 
+ 	if (v500) {
+-		ret = clk_set_rate(l2_pri_mux_clk, 1188000000);
+-		if (ret || clk_get_rate(l2_pri_mux_clk) != 1188000000)
++		ret = clk_set_rate(l2_pri_mux_clk, l2_rate);
++		if (ret || clk_get_rate(l2_pri_mux_clk) != l2_rate)
+ 			return dev_err_probe(dev, ret ?: -EIO, "L2 clock rate\n");
+ 	}
+ 	return of_clk_add_provider(dev->of_node, krait_of_get, clks);

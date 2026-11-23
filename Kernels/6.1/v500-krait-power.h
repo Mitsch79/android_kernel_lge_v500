@@ -1,7 +1,34 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include <linux/nvmem-consumer.h>
 #include <linux/regulator/consumer.h>
 
-/* LG's L2(15) operating point. Hold shared resources across independent
+/* Use the highest LG L2 row for this speed bin (PTE format A). */
+static int v500_l2_rate(struct device *dev, unsigned long *rate)
+{
+	u32 pte, speed;
+	int ret = nvmem_cell_read_u32(dev, "speedbin", &pte);
+
+	if (ret)
+		return ret;
+	speed = pte & 0xf;
+	if (speed == 0xf)
+		speed = (pte >> 4) & 0xf;
+	switch (speed) {
+	case 1:
+		*rate = 1188000000;
+		return 0;
+	case 0:
+	case 2:
+	case 14:
+	case 15: /* Both speed fuses unset: LG defaults to speed 0. */
+		*rate = 1134000000;
+		return 0;
+	default:
+		return -ENODEV;
+	}
+}
+
+/* LG's peak shared voltage and interconnect votes. Hold shared resources across independent
  * CPU policies; CPU voltages are switched individually by cpufreq-dt.
  */
 static int v500_prepare_krait(struct device *dev)
