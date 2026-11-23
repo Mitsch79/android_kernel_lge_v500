@@ -22,8 +22,9 @@ against LG, run `python3 Kernels/6.1/check-v500-cpu-opps.py LG_KERNEL_REPO DTB`.
 Each SAW regulator resolves its CPU supply consumer at probe and runs voltage
 changes synchronously on that CPU. Four speed-bin 1 V500 tablets (PVS 3/4/5)
 completed the mixed CPU/memory load with zero reported voltage timeouts.
-A separate CPU1 offline/online test on one tablet failed to bring CPU1 back
-with both the previous and the target-CPU regulator.
+The regular V500 patch series enables the wakeup IPI around the platform WFI
+call during CPU hotplug. On all four tablets CPUs 1, 2 and 3 went offline
+and came back online individually before completing the mixed load test.
 
 The short RAM test repeats four-core calculations for up to 24 seconds
 and stops at the first sampled CPU temperature of 75 °C. To include a

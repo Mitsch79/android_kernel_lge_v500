@@ -55,6 +55,7 @@ if [[ $vbif_cancel_idle == 1 ]]; then changes+=(v500-a320-vbif-resume); fi
 changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc v500-usb-charger v500-usb-cdp)
 if [[ $cpu_supply_probe == 1 ]]; then changes+=(v500-saw-regulator); fi
 if [[ $cpu_scaling == 1 ]]; then changes+=(v500-krait-clock v500-krait-bins); fi
+changes+=(v500-hotplug-wakeup)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"

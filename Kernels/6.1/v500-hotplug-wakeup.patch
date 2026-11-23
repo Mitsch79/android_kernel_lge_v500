@@ -1,0 +1,36 @@
+--- a/arch/arm/kernel/smp.c
++++ b/arch/arm/kernel/smp.c
+@@ -20,6 +20,7 @@
+ #include <linux/cpu.h>
+ #include <linux/seq_file.h>
+ #include <linux/irq.h>
++#include <linux/of.h>
+ #include <linux/nmi.h>
+ #include <linux/percpu.h>
+ #include <linux/clockchips.h>
+@@ -327,6 +328,7 @@
+ void arch_cpu_idle_dead(void)
+ {
+ 	unsigned int cpu = smp_processor_id();
++	bool v500_wfi = of_machine_is_compatible("lg,v500");
+ 
+ 	idle_task_exit();
+ 
+@@ -367,8 +369,16 @@
+ 	 * The return path should not be used for platforms which can
+ 	 * power off the CPU.
+ 	 */
+-	if (smp_ops.cpu_die)
++	if (smp_ops.cpu_die) {
++		/* The V500 parks in WFI. Its warm start needs the wakeup SGI
++		 * that ipi_teardown() masked when this CPU went offline.
++		 */
++		if (v500_wfi)
++			enable_percpu_irq(ipi_irq_base + IPI_WAKEUP, 0);
+ 		smp_ops.cpu_die(cpu);
++		if (v500_wfi)
++			disable_percpu_irq(ipi_irq_base + IPI_WAKEUP);
++	}
+ 
+ 	pr_warn("CPU%u: smp_ops.cpu_die() returned, trying to resuscitate\n",
+ 		cpu);
