@@ -1,0 +1,73 @@
+--- a/drivers/clk/qcom/kpss-xcc.c
++++ b/drivers/clk/qcom/kpss-xcc.c
+@@ -60,7 +60,11 @@
+ 							base, 0, 0x3,
+ 							0, aux_parent_map, NULL);
+ 
+-	return PTR_ERR_OR_ZERO(hw);
++	if (IS_ERR(hw))
++		return PTR_ERR(hw);
++	if (of_find_property(pdev->dev.of_node, "#clock-cells", NULL))
++		return devm_of_clk_add_hw_provider(&pdev->dev, of_clk_hw_simple_get, hw);
++	return 0;
+ }
+ 
+ static struct platform_driver kpss_xcc_driver = {
+--- a/drivers/clk/qcom/krait-cc.c
++++ b/drivers/clk/qcom/krait-cc.c
+@@ -14,6 +14,7 @@
+ #include <linux/slab.h>
+ 
+ #include "clk-krait.h"
++#include "v500-krait-power.h"
+ 
+ static unsigned int sec_mux_map[] = {
+ 	2,
+@@ -305,6 +306,14 @@
+ 	struct clk **clks;
+ 	struct clk *l2_pri_mux_clk;
+ 
++	bool v500 = of_device_is_compatible(dev->of_node, "lg,v500-krait-cc");
++	int ret;
++
++	if (v500) {
++		ret = v500_prepare_krait(dev);
++		if (ret)
++			return dev_err_probe(dev, ret, "Krait supplies and clock parents\n");
++	}
+ 	id = of_match_device(krait_cc_match_table, dev);
+ 	if (!id)
+ 		return -ENODEV;
+@@ -386,9 +395,12 @@
+ 		pr_info("CPU%d @ %lu KHz\n", cpu, clk_get_rate(clk) / 1000);
+ 	}
+ 
+-	of_clk_add_provider(dev->of_node, krait_of_get, clks);
+-
+-	return 0;
++	if (v500) {
++		ret = clk_set_rate(l2_pri_mux_clk, 1188000000);
++		if (ret || clk_get_rate(l2_pri_mux_clk) != 1188000000)
++			return dev_err_probe(dev, ret ?: -EIO, "L2 clock rate\n");
++	}
++	return of_clk_add_provider(dev->of_node, krait_of_get, clks);
+ }
+ 
+ static struct platform_driver krait_cc_driver = {
+--- a/drivers/clk/qcom/gcc-msm8960.c
++++ b/drivers/clk/qcom/gcc-msm8960.c
+@@ -3737,6 +3737,14 @@
+ 		return ret;
+ 
+ 	if (match->data == &gcc_apq8064_desc) {
++		/* The V500 LG clock driver uses a 60-us lock delay. */
++		if (of_machine_is_compatible("lg,v500")) {
++			hfpll0_data.status_reg = 0;
++			hfpll1_8064_data.status_reg = 0;
++			hfpll2_data.status_reg = 0;
++			hfpll3_data.status_reg = 0;
++			hfpll_l2_8064_data.status_reg = 0;
++		}
+ 		hfpll1.d = &hfpll1_8064_data;
+ 		hfpll_l2.d = &hfpll_l2_8064_data;
+ 	}

@@ -1,0 +1,21 @@
+--- a/drivers/soc/qcom/spm.c
++++ b/drivers/soc/qcom/spm.c
+@@ -18,6 +18,7 @@
+ #include <linux/platform_device.h>
+ #include <soc/qcom/spm.h>
+ 
++#include "v500-saw-regulator.h"
+ #define SPM_CTL_INDEX		0x7f
+ #define SPM_CTL_INDEX_SHIFT	4
+ #define SPM_CTL_EN		BIT(0)
+@@ -272,6 +273,10 @@
+ 	/* Set up Standby as the default low power mode */
+ 	if (drv->reg_data->reg_offset[SPM_REG_SPM_CTL])
+ 		spm_set_low_power_mode(drv, PM_SLEEP_MODE_STBY);
++	if (of_machine_is_compatible("lg,v500") &&
++	    of_device_is_compatible(pdev->dev.of_node, "qcom,apq8064-saw2-v1.1-cpu") &&
++	    of_property_read_bool(pdev->dev.of_node, "lg,cpu-voltage-control"))
++		return v500_saw_register(pdev, drv->reg_base);
+ 
+ 	return 0;
+ }

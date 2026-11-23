@@ -1,0 +1,126 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+&CPU0 { #cooling-cells = <2>; };
+&{/thermal-zones/cpu0-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_alert0>;
+			cooling-device = <&CPU0 0xffffffff 0xffffffff>;
+		};
+	};
+};
+
+&CPU1 { #cooling-cells = <2>; };
+&{/thermal-zones/cpu1-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_alert1>;
+			cooling-device = <&CPU1 0xffffffff 0xffffffff>;
+		};
+	};
+};
+
+&CPU2 { #cooling-cells = <2>; };
+&{/thermal-zones/cpu2-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_alert2>;
+			cooling-device = <&CPU2 0xffffffff 0xffffffff>;
+		};
+	};
+};
+
+&CPU3 { #cooling-cells = <2>; };
+&{/thermal-zones/cpu3-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_alert3>;
+			cooling-device = <&CPU3 0xffffffff 0xffffffff>;
+		};
+	};
+};
+&pm8921_s1 {
+	qcom,switch-mode-frequency = <3200000>;
+	regulator-min-microvolt = <1225000>;
+	regulator-max-microvolt = <1225000>;
+	regulator-always-on;
+};
+&pm8921_s3 {
+	regulator-max-microvolt = <1150000>;
+};
+&pm8921_l24 {
+	regulator-min-microvolt = <1050000>;
+	regulator-max-microvolt = <1150000>;
+};
+&{/soc/rpm@108000/regulators} {
+	vdd_l24-supply = <&pm8921_s1>;
+	vin_lvs4_5_7-supply = <&pm8921_s4>;
+};
+
+&v500_cpu_opps {
+	compatible = "operating-points-v2-kryo-cpu";
+};
+
+&acc0 {
+	#clock-cells = <0>;
+	clock-output-names = "acpu0_aux";
+	clocks = <&gcc PLL8_VOTE>, <&pxo_board>;
+	clock-names = "pll8_vote", "pxo";
+};
+&CPU0 {
+	clocks = <&v500_krait 0>;
+	operating-points-v2 = <&v500_cpu_opps>;
+};
+
+&acc1 {
+	#clock-cells = <0>;
+	clock-output-names = "acpu1_aux";
+	clocks = <&gcc PLL8_VOTE>, <&pxo_board>;
+	clock-names = "pll8_vote", "pxo";
+};
+&CPU1 {
+	clocks = <&v500_krait 1>;
+	operating-points-v2 = <&v500_cpu_opps>;
+};
+
+&acc2 {
+	#clock-cells = <0>;
+	clock-output-names = "acpu2_aux";
+	clocks = <&gcc PLL8_VOTE>, <&pxo_board>;
+	clock-names = "pll8_vote", "pxo";
+};
+&CPU2 {
+	clocks = <&v500_krait 2>;
+	operating-points-v2 = <&v500_cpu_opps>;
+};
+
+&acc3 {
+	#clock-cells = <0>;
+	clock-output-names = "acpu3_aux";
+	clocks = <&gcc PLL8_VOTE>, <&pxo_board>;
+	clock-names = "pll8_vote", "pxo";
+};
+&CPU3 {
+	clocks = <&v500_krait 3>;
+	operating-points-v2 = <&v500_cpu_opps>;
+};
+
+&l2cc {
+	#clock-cells = <0>;
+	clocks = <&gcc PLL8_VOTE>, <&pxo_board>;
+	clock-names = "pll8_vote", "pxo";
+};
+/ {
+	v500_krait: krait-clock-controller {
+		compatible = "lg,v500-krait-cc", "qcom,krait-cc-v1";
+		#clock-cells = <1>;
+		mem-supply = <&pm8921_l24>;
+		dig-supply = <&pm8921_s3>;
+		pll-supply = <&pm8921_lvs7>;
+		clocks = <&acc0>, <&acc1>, <&acc2>, <&acc3>, <&l2cc>,
+			 <&gcc PLL9>, <&gcc PLL10>, <&gcc PLL16>, <&gcc PLL17>,
+			 <&gcc PLL12>, <&rpmcc RPM_EBI1_A_CLK>;
+		clock-names = "aux0", "aux1", "aux2", "aux3", "aux-l2",
+			      "pll0", "pll1", "pll2", "pll3", "pll-l2", "ebi";
+	};
+};

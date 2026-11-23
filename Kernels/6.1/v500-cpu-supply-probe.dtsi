@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* APQ8064 speed 1, PVS5, measured on V500 Nr. 2. */
+&qfprom {
+	v500_cpu_bin: speedbin@c0 {
+		reg = <0xc0 4>;
+	};
+};
+
+&saw0 {
+	lg,cpu-voltage-control;
+	v500_cpu0_reg: cpu-regulator {
+		regulator-name = "v500-krait0";
+		regulator-min-microvolt = <850000>;
+		regulator-max-microvolt = <1300000>;
+	};
+};
+
+&CPU0 {
+	cpu-supply = <&v500_cpu0_reg>;
+};
+
+&saw1 {
+	lg,cpu-voltage-control;
+	v500_cpu1_reg: cpu-regulator {
+		regulator-name = "v500-krait1";
+		regulator-min-microvolt = <850000>;
+		regulator-max-microvolt = <1300000>;
+	};
+};
+
+&CPU1 {
+	cpu-supply = <&v500_cpu1_reg>;
+};
+
+&saw2 {
+	lg,cpu-voltage-control;
+	v500_cpu2_reg: cpu-regulator {
+		regulator-name = "v500-krait2";
+		regulator-min-microvolt = <850000>;
+		regulator-max-microvolt = <1300000>;
+	};
+};
+
+&CPU2 {
+	cpu-supply = <&v500_cpu2_reg>;
+};
+
+&saw3 {
+	lg,cpu-voltage-control;
+	v500_cpu3_reg: cpu-regulator {
+		regulator-name = "v500-krait3";
+		regulator-min-microvolt = <850000>;
+		regulator-max-microvolt = <1300000>;
+	};
+};
+
+&CPU3 {
+	cpu-supply = <&v500_cpu3_reg>;
+};
+
+/ {
+	/* Attach to CPUs only when L2 and shared RPM votes are implemented. */
+	v500_cpu_opps: opp-table-cpu {
+		compatible = "operating-points-v2-krait-cpu";
+		nvmem-cells = <&v500_cpu_bin>;
+
+		opp-384000000 {
+			opp-hz = /bits/ 64 <384000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <900000>;
+		};
+
+		opp-486000000 {
+			opp-hz = /bits/ 64 <486000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <900000>;
+		};
+
+		opp-594000000 {
+			opp-hz = /bits/ 64 <594000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <900000>;
+		};
+
+		opp-702000000 {
+			opp-hz = /bits/ 64 <702000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <900000>;
+		};
+
+		opp-810000000 {
+			opp-hz = /bits/ 64 <810000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <912500>;
+		};
+
+		opp-918000000 {
+			opp-hz = /bits/ 64 <918000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <925000>;
+		};
+
+		opp-1026000000 {
+			opp-hz = /bits/ 64 <1026000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <950000>;
+		};
+
+		opp-1134000000 {
+			opp-hz = /bits/ 64 <1134000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <962500>;
+		};
+
+		opp-1242000000 {
+			opp-hz = /bits/ 64 <1242000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <975000>;
+		};
+
+		opp-1350000000 {
+			opp-hz = /bits/ 64 <1350000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <987500>;
+		};
+
+		opp-1458000000 {
+			opp-hz = /bits/ 64 <1458000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <1012500>;
+		};
+
+		opp-1566000000 {
+			opp-hz = /bits/ 64 <1566000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <1037500>;
+		};
+
+		opp-1674000000 {
+			opp-hz = /bits/ 64 <1674000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <1075000>;
+		};
+
+		opp-1728000000 {
+			opp-hz = /bits/ 64 <1728000000>;
+			opp-supported-hw = <2>;
+			opp-microvolt-speed1-pvs5-v0 = <1100000>;
+		};
+	};
+};

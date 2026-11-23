@@ -1,0 +1,19 @@
+#!/bin/sh
+log() { echo "<5>v500-cpufreq $*" > /dev/kmsg; }
+base=/sys/devices/system/cpu/cpufreq
+for cpu in 0 1 2 3; do
+    path=$base/policy$cpu
+    if [ ! -r "$path/cpuinfo_max_freq" ]; then
+        log "missing policy $cpu"
+        exit 1
+    fi
+    log "policy=$cpu max=$(cat "$path/cpuinfo_max_freq") governor=$(cat "$path/scaling_governor")"
+done
+/bin/core-reference > /tmp/cpu-samples
+rc=$?
+while IFS= read -r line; do log "$line"; done < /tmp/cpu-samples
+sleep 1
+for cpu in 0 1 2 3; do
+    log "idle cpu=$cpu kHz=$(cat "$base/policy$cpu/scaling_cur_freq")"
+done
+log "result=$rc"

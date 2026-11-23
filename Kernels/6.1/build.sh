@@ -7,6 +7,19 @@ revision=b07b626eb82251b596ef1812adf7c33ad6e4f16e
 source_dir="$work/v500-port-6.1.177"
 build_dir="$work/build-6.1.177-v500"
 probe=${1:-lineage21}
+cpu_supply_probe=${V500_CPU_SUPPLY_PROBE:-0}
+cpu_scaling=${V500_CPU_SCALING:-0}
+case "$cpu_scaling" in
+    0) ;;
+    1) cpu_supply_probe=1; source_dir+=-cpufreq; build_dir+=-cpufreq ;;
+    *) echo 'V500_CPU_SCALING must be 0 or 1' >&2; exit 2 ;;
+esac
+case "$cpu_supply_probe" in
+    0) ;;
+    1) source_dir+=-cpu-supply; build_dir+=-cpu-supply
+       : "${V500_EXPORT_DIR:?Specify a separate CPU probe export directory}" ;;
+    *) echo 'V500_CPU_SUPPLY_PROBE must be 0 or 1' >&2; exit 2 ;;
+esac
 case "$probe" in trace|lineage21) ;; *) echo "Usage: $0 [trace|lineage21]" >&2; exit 2 ;; esac
 vbif_cancel_idle=${V500_M6_VBIF_CANCEL_IDLE:-0}
 case "$vbif_cancel_idle" in
@@ -34,6 +47,8 @@ changes=(v500-arm-boot v500-peripherals v500-maxtouch-fifo v500-arm-bpf-atomic-a
          v500-a320-vbif-timeout)
 if [[ $vbif_cancel_idle == 1 ]]; then changes+=(v500-a320-vbif-resume); fi
 changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc v500-usb-charger v500-usb-cdp)
+if [[ $cpu_supply_probe == 1 ]]; then changes+=(v500-saw-regulator); fi
+if [[ $cpu_scaling == 1 ]]; then changes+=(v500-krait-clock); fi
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
@@ -56,11 +71,23 @@ install -m644 "$here/extcon-pm8921-usb.c" "$source_dir/drivers/extcon/"
 install -m644 "$port/v500-battery.c" "$port/v500-battery-data.h" "$source_dir/drivers/power/supply/"
 install -m644 "$port/v500-battery.h" "$source_dir/include/linux/power/"
 install -m644 "$port/v500-usb-charger.h" "$source_dir/drivers/usb/chipidea/"
+if [[ $cpu_supply_probe == 1 ]]; then
+    install -m644 "$port/v500-saw-regulator.h" "$source_dir/drivers/soc/qcom/"
+fi
+if [[ $cpu_scaling == 1 ]]; then
+    install -m644 "$port/v500-krait-power.h" "$source_dir/drivers/clk/qcom/"
+fi
 cp "$here"/qcom-apq8064-lg-v500*.dts "$build_dir/board/"
 cp "$source_dir/arch/arm/boot/dts"/qcom-apq8064{,-v2.0}.dtsi "$build_dir/board/"
 patch --batch --fuzz=0 -d "$build_dir/board" -p1 < "$port/v500-board-6.1.patch"
 dts=qcom-apq8064-lg-v500-display
 cat "$port/v500-battery.dtsi" >> "$build_dir/board/$dts.dts"
+if [[ $cpu_supply_probe == 1 ]]; then
+    cat "$port/v500-cpu-supply-probe.dtsi" >> "$build_dir/board/$dts.dts"
+fi
+if [[ $cpu_scaling == 1 ]]; then
+    cat "$port/v500-cpufreq.dtsi" >> "$build_dir/board/$dts.dts"
+fi
 usb_charging=${V500_USB_CHARGING:-}
 if [[ -z $usb_charging ]]; then
     if [[ $probe == lineage21 ]]; then usb_charging=1; else usb_charging=0; fi
@@ -157,6 +184,13 @@ config="$build_dir/v500.config"
 cat "$here/v500-test.config" "$here/v500-stable.config" "$here/v500-display.config" \
     "$here/v500-android.config" "$here/v500-lineage21.config" "$port/v500-6.1.config" > "$config"
 atomic_module=
+if [[ $cpu_scaling == 1 ]]; then
+    printf 'CONFIG_THERMAL=y\nCONFIG_THERMAL_OF=y\nCONFIG_CPU_THERMAL=y\nCONFIG_CPU_FREQ_THERMAL=y\nCONFIG_QCOM_TSENS=y\n' >> "$config"
+    printf 'CONFIG_CPU_FREQ=y\nCONFIG_CPUFREQ_DT=y\nCONFIG_ARM_QCOM_CPUFREQ_NVMEM=y\nCONFIG_KPSS_XCC=y\nCONFIG_KRAITCC=y\nCONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND=y\nCONFIG_QCOM_SMEM=y\nCONFIG_HWSPINLOCK=y\nCONFIG_HWSPINLOCK_QCOM=y\nCONFIG_ARM_PMU=y\nCONFIG_HW_PERF_EVENTS=y\n' >> "$config"
+fi
+if [[ $cpu_supply_probe == 1 ]]; then
+    printf 'CONFIG_QCOM_SPM=y\nCONFIG_NVMEM_QCOM_QFPROM=y\n' >> "$config"
+fi
 if [[ ${V500_TEST_ATOMIC_ADD:-0} == 1 ]]; then
     [[ $probe == trace ]]
     printf 'CONFIG_RUNTIME_TESTING_MENU=y\nCONFIG_TEST_BPF=m\nCONFIG_MODULE_UNLOAD=y\n' >> "$config"
@@ -172,6 +206,16 @@ if [[ $probe == lineage21 ]]; then
     printf 'CONFIG_EXTRA_FIRMWARE="qcom/a300_pm4.fw qcom/a300_pfp.fw"\nCONFIG_EXTRA_FIRMWARE_DIR="%s"\n' "$fw" >> "$config"
 fi
 "${build[@]}" KCONFIG_ALLCONFIG="$config" allnoconfig
+if [[ $cpu_scaling == 1 ]]; then
+    for symbol in CPUFREQ_DT ARM_QCOM_CPUFREQ_NVMEM KPSS_XCC KRAITCC CPU_FREQ_DEFAULT_GOV_ONDEMAND CPU_FREQ_THERMAL QCOM_TSENS; do
+        grep -Fx "CONFIG_$symbol=y" "$build_dir/.config"
+    done
+fi
+if [[ $cpu_supply_probe == 1 ]]; then
+    for symbol in QCOM_SPM NVMEM_QCOM_QFPROM REGULATOR; do
+        grep -Fx "CONFIG_$symbol=y" "$build_dir/.config"
+    done
+fi
 if [[ $probe == lineage21 ]]; then grep -Fx 'CONFIG_HIGH_RES_TIMERS=y' "$build_dir/.config"; fi
 for symbol in ARCH_QCOM ARCH_MSM8960 CLKSRC_QCOM ARM_APPENDED_DTB ARM_ATAG_DTB_COMPAT HIGHMEM SMP MMC_ARMMMCI \
               ANDROID_BINDER_IPC ANDROID_BINDERFS ASHMEM EXT4_FS USB_CHIPIDEA_MSM EXTCON_PM8921_USB PSTORE_RAM \

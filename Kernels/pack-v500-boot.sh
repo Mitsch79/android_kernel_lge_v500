@@ -90,6 +90,12 @@ if [[ "$probe" == trace && -f ${port:-/nonexistent}/v500-battery-sample ]]; then
     qemu-arm "$busybox" sh -n "$port/v500-battery-sample"
     printf 'file /bin/v500-battery-sample %s/v500-battery-sample 0755 0 0\n' "$port" >> "$build_dir/initramfs.list"
 fi
+if [[ "$probe" == trace && ${cpu_scaling:-0} == 1 ]]; then
+    "${compiler[@]}" "${userspace_cppflags[@]}" -static -O2 -Wall -Wextra -Werror \
+        "$port/v500-core-reference.c" -o "$build_dir/core-reference"
+    qemu-arm "$busybox" sh -n "$port/v500-cpufreq-test"
+    printf 'file /bin/core-reference %s/core-reference 0755 0 0\nfile /bin/v500-cpufreq-test %s/v500-cpufreq-test 0755 0 0\n' "$build_dir" "$port" >> "$build_dir/initramfs.list"
+fi
 if [[ "$dts" == *-stable ]]; then
     qemu-arm "$busybox" sh -n "$here/v500-load"
     printf 'file /bin/v500-load %s/v500-load 0755 0 0\n' "$here" >> "$build_dir/initramfs.list"

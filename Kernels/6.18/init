@@ -98,6 +98,9 @@ case " $(cat /proc/cmdline) " in
             fi
         done
         log "Requesting reboot to recovery after offline checks"
+        if [ -x /bin/v500-cpufreq-test ]; then
+            /bin/v500-cpufreq-test
+        fi
         if [ -x /bin/v500-battery-sample ]; then
             /bin/v500-battery-sample
         fi
