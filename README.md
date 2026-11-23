@@ -19,8 +19,11 @@ erratum use the 1150 mV base floor before the per-table boost. L2 runs at
 1188 MHz for bin 1 and 1134 MHz for bins 0, 2 and 14. Factory-cable boot
 profiles are outside the normal CPUFreq table. To compare a built DTB
 against LG, run `python3 Kernels/6.1/check-v500-cpu-opps.py LG_KERNEL_REPO DTB`.
-Hardware measurements cover bin 1, PVS 3/4/5. Sustained load has exposed
-SAW voltage acknowledgement timeouts on each of the four test tablets.
+Each SAW regulator resolves its CPU supply consumer at probe and runs voltage
+changes synchronously on that CPU. Four speed-bin 1 V500 tablets (PVS 3/4/5)
+completed the mixed CPU/memory load with zero reported voltage timeouts.
+A separate CPU1 offline/online test on one tablet failed to bring CPU1 back
+with both the previous and the target-CPU regulator.
 
 The short RAM test repeats four-core calculations for up to 24 seconds
 and stops at the first sampled CPU temperature of 75 °C. To include a
