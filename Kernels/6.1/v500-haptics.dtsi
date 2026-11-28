@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
+&pmicintc {
+	vibrator@4a {
+		compatible = "qcom,pm8921-vib";
+		reg = <0x4a>;
+		/* AWIFI board limit used by LG's PM8921 vibrator configuration. */
+		qcom,drive-max-microvolt = <2300000>;
+	};
+};

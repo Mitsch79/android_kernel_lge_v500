@@ -56,6 +56,7 @@ changes+=(v500-msm8960-usb-phy-reset-id v500-battery v500-awifi-xoadc v500-usb-c
 if [[ $cpu_supply_probe == 1 ]]; then changes+=(v500-saw-regulator); fi
 if [[ $cpu_scaling == 1 ]]; then changes+=(v500-krait-clock v500-krait-bins); fi
 changes+=(v500-hotplug-wakeup)
+changes+=(v500-pm8921-vibrator)
 kernel_git=(git -C "$source_dir")
 expected_index="$build_dir/v500-series.index"
 series_patch="$build_dir/v500-series.patch"
@@ -94,6 +95,9 @@ if [[ $cpu_supply_probe == 1 ]]; then
 fi
 if [[ $cpu_scaling == 1 ]]; then
     cat "$port/v500-cpufreq.dtsi" >> "$build_dir/board/$dts.dts"
+fi
+if [[ $probe == lineage21 ]]; then
+    cat "$port/v500-haptics.dtsi" >> "$build_dir/board/$dts.dts"
 fi
 usb_charging=${V500_USB_CHARGING:-}
 if [[ -z $usb_charging ]]; then
@@ -206,7 +210,7 @@ if [[ ${V500_TEST_ATOMIC_ADD:-0} == 1 ]]; then
 fi
 if [[ $probe == lineage21 ]]; then
     # Android's frame scheduler and the GPU driver's sleepable waits need sub-tick timers.
-    printf 'CONFIG_HIGH_RES_TIMERS=y\n' >> "$config"
+    printf 'CONFIG_HIGH_RES_TIMERS=y\nCONFIG_INPUT_PM8XXX_VIBRATOR=y\n' >> "$config"
     sed -i '/^CONFIG_USB_G_SERIAL=/d' "$config"
     fw="$build_dir/firmware"
     install -d "$fw/qcom"
@@ -224,7 +228,11 @@ if [[ $cpu_supply_probe == 1 ]]; then
         grep -Fx "CONFIG_$symbol=y" "$build_dir/.config"
     done
 fi
-if [[ $probe == lineage21 ]]; then grep -Fx 'CONFIG_HIGH_RES_TIMERS=y' "$build_dir/.config"; fi
+if [[ $probe == lineage21 ]]; then
+    for symbol in HIGH_RES_TIMERS INPUT_EVDEV INPUT_FF_MEMLESS INPUT_PM8XXX_VIBRATOR; do
+        grep -Fx "CONFIG_$symbol=y" "$build_dir/.config"
+    done
+fi
 for symbol in ARCH_QCOM ARCH_MSM8960 CLKSRC_QCOM ARM_APPENDED_DTB ARM_ATAG_DTB_COMPAT HIGHMEM SMP MMC_ARMMMCI \
               ANDROID_BINDER_IPC ANDROID_BINDERFS ASHMEM EXT4_FS USB_CHIPIDEA_MSM EXTCON_PM8921_USB PSTORE_RAM \
               TOUCHSCREEN_ATMEL_MXT LEDS_LM3532 DRM_MSM_MDP4 DRM_MSM_DSI_28NM_8960_PHY DRM_PANEL_LG_LD083WU1 \

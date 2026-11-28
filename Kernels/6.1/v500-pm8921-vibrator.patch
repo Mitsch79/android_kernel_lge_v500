@@ -1,0 +1,214 @@
+diff --git a/drivers/input/misc/pm8xxx-vibrator.c b/drivers/input/misc/pm8xxx-vibrator.c
+--- a/drivers/input/misc/pm8xxx-vibrator.c
++++ b/drivers/input/misc/pm8xxx-vibrator.c
+@@ -15,7 +15,6 @@
+ #define VIB_MAX_LEVEL_mV	(3100)
+ #define VIB_MIN_LEVEL_mV	(1200)
+ #define VIB_PER_STEP_mV		(100)
+-#define VIB_MAX_LEVELS		(VIB_MAX_LEVEL_mV - VIB_MIN_LEVEL_mV + VIB_PER_STEP_mV)
+ 
+ #define MAX_FF_SPEED		0xff
+ 
+@@ -52,9 +51,7 @@
+  * @regmap: regmap for register read/write
+  * @regs: registers' info
+  * @speed: speed of vibration set from userland
+- * @active: state of vibrator
+- * @level: level of vibration to set in the chip
+- * @reg_vib_drv: regs->drv_addr register value
++ * @max_mv: maximum board drive voltage in millivolts
+  */
+ struct pm8xxx_vib {
+ 	struct input_dev *vib_input_dev;
+@@ -62,38 +59,30 @@
+ 	struct regmap *regmap;
+ 	const struct pm8xxx_regs *regs;
+ 	int speed;
+-	int level;
+-	bool active;
+-	u8  reg_vib_drv;
++	unsigned int max_mv;
+ };
+ 
+ /**
+  * pm8xxx_vib_set - handler to start/stop vibration
+  * @vib: pointer to vibrator structure
+- * @on: state to set
+- */
+-static int pm8xxx_vib_set(struct pm8xxx_vib *vib, bool on)
+-{
++ * @level: voltage selector, or zero to stop
++ */
++static int pm8xxx_vib_set(struct pm8xxx_vib *vib, unsigned int level)
++{
++	const struct pm8xxx_regs *regs = vib->regs;
+ 	int rc;
+-	unsigned int val = vib->reg_vib_drv;
+-	const struct pm8xxx_regs *regs = vib->regs;
+-
+-	if (on)
+-		val |= (vib->level << regs->drv_shift) & regs->drv_mask;
+-	else
+-		val &= ~regs->drv_mask;
+-
+-	rc = regmap_write(vib->regmap, regs->drv_addr, val);
+-	if (rc < 0)
++
++	rc = regmap_update_bits(vib->regmap, regs->drv_addr, regs->drv_mask,
++				level << regs->drv_shift);
++	if (rc)
+ 		return rc;
+ 
+-	vib->reg_vib_drv = val;
+-
+ 	if (regs->enable_mask)
+-		rc = regmap_update_bits(vib->regmap, regs->enable_addr,
+-					regs->enable_mask, on ? ~0 : 0);
+-
+-	return rc;
++		return regmap_update_bits(vib->regmap, regs->enable_addr,
++					  regs->enable_mask,
++					  level ? regs->enable_mask : 0);
++
++	return 0;
+ }
+ 
+ /**
+@@ -103,29 +92,23 @@
+ static void pm8xxx_work_handler(struct work_struct *work)
+ {
+ 	struct pm8xxx_vib *vib = container_of(work, struct pm8xxx_vib, work);
+-	const struct pm8xxx_regs *regs = vib->regs;
++	unsigned int speed = READ_ONCE(vib->speed);
++	unsigned int level = 0;
+ 	int rc;
+-	unsigned int val;
+-
+-	rc = regmap_read(vib->regmap, regs->drv_addr, &val);
+-	if (rc < 0)
+-		return;
+-
+-	/*
+-	 * pmic vibrator supports voltage ranges from 1.2 to 3.1V, so
+-	 * scale the level to fit into these ranges.
+-	 */
+-	if (vib->speed) {
+-		vib->active = true;
+-		vib->level = ((VIB_MAX_LEVELS * vib->speed) / MAX_FF_SPEED) +
+-						VIB_MIN_LEVEL_mV;
+-		vib->level /= VIB_PER_STEP_mV;
+-	} else {
+-		vib->active = false;
+-		vib->level = VIB_MIN_LEVEL_mV / VIB_PER_STEP_mV;
+-	}
+-
+-	pm8xxx_vib_set(vib, vib->active);
++
++	if (speed)
++		level = (VIB_MIN_LEVEL_mV +
++			 DIV_ROUND_CLOSEST((vib->max_mv - VIB_MIN_LEVEL_mV) * speed,
++					   MAX_FF_SPEED)) / VIB_PER_STEP_mV;
++
++	rc = pm8xxx_vib_set(vib, level);
++	if (rc)
++		dev_err_ratelimited(vib->vib_input_dev->dev.parent,
++				    "failed to set vibrator level %u: %d\n",
++				    level, rc);
++	else
++		dev_dbg(vib->vib_input_dev->dev.parent, "drive %u mV\n",
++			level * VIB_PER_STEP_mV);
+ }
+ 
+ /**
+@@ -139,8 +122,7 @@
+ 	struct pm8xxx_vib *vib = input_get_drvdata(dev);
+ 
+ 	cancel_work_sync(&vib->work);
+-	if (vib->active)
+-		pm8xxx_vib_set(vib, false);
++	pm8xxx_vib_set(vib, 0);
+ }
+ 
+ /**
+@@ -156,9 +138,11 @@
+ {
+ 	struct pm8xxx_vib *vib = input_get_drvdata(dev);
+ 
+-	vib->speed = effect->u.rumble.strong_magnitude >> 8;
+-	if (!vib->speed)
+-		vib->speed = effect->u.rumble.weak_magnitude >> 9;
++	unsigned int speed = effect->u.rumble.strong_magnitude >> 8;
++
++	if (!speed)
++		speed = effect->u.rumble.weak_magnitude >> 9;
++	WRITE_ONCE(vib->speed, speed);
+ 
+ 	schedule_work(&vib->work);
+ 
+@@ -172,6 +156,7 @@
+ 	int error;
+ 	unsigned int val;
+ 	const struct pm8xxx_regs *regs;
++	u32 max_uv;
+ 
+ 	vib = devm_kzalloc(&pdev->dev, sizeof(*vib), GFP_KERNEL);
+ 	if (!vib)
+@@ -189,19 +174,27 @@
+ 	vib->vib_input_dev = input_dev;
+ 
+ 	regs = of_device_get_match_data(&pdev->dev);
++	vib->max_mv = VIB_MAX_LEVEL_mV;
++	if (of_find_property(pdev->dev.of_node, "qcom,drive-max-microvolt", NULL)) {
++		error = of_property_read_u32(pdev->dev.of_node, "qcom,drive-max-microvolt",
++					     &max_uv);
++		if (error || max_uv < VIB_MIN_LEVEL_mV * 1000 ||
++		    max_uv > VIB_MAX_LEVEL_mV * 1000 || max_uv % (VIB_PER_STEP_mV * 1000))
++			return dev_err_probe(&pdev->dev, -EINVAL, "invalid drive voltage limit\n");
++		vib->max_mv = max_uv / 1000;
++	}
+ 
+ 	/* operate in manual mode */
+ 	error = regmap_read(vib->regmap, regs->drv_addr, &val);
+ 	if (error < 0)
+ 		return error;
+ 
+-	val &= regs->drv_en_manual_mask;
++	val &= regs->drv_en_manual_mask & ~regs->drv_mask;
+ 	error = regmap_write(vib->regmap, regs->drv_addr, val);
+ 	if (error < 0)
+ 		return error;
+ 
+ 	vib->regs = regs;
+-	vib->reg_vib_drv = val;
+ 
+ 	input_dev->name = "pm8xxx_vib_ffmemless";
+ 	input_dev->id.version = 1;
+@@ -231,10 +224,8 @@
+ {
+ 	struct pm8xxx_vib *vib = dev_get_drvdata(dev);
+ 
+-	/* Turn off the vibrator */
+-	pm8xxx_vib_set(vib, false);
+-
+-	return 0;
++	cancel_work_sync(&vib->work);
++	return pm8xxx_vib_set(vib, 0);
+ }
+ 
+ static SIMPLE_DEV_PM_OPS(pm8xxx_vib_pm_ops, pm8xxx_vib_suspend, NULL);
+diff --git a/Documentation/devicetree/bindings/input/qcom,pm8xxx-vib.yaml b/Documentation/devicetree/bindings/input/qcom,pm8xxx-vib.yaml
+--- a/Documentation/devicetree/bindings/input/qcom,pm8xxx-vib.yaml
++++ b/Documentation/devicetree/bindings/input/qcom,pm8xxx-vib.yaml
+@@ -19,6 +19,12 @@
+   reg:
+     maxItems: 1
+ 
++  qcom,drive-max-microvolt:
++    description: Maximum output voltage allowed by the board's motor circuit.
++    minimum: 1200000
++    maximum: 3100000
++    multipleOf: 100000
++
+ required:
+   - compatible
+   - reg
